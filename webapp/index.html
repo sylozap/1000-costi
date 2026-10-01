@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>1000 — кости</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v=1">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand"><span class="logo">⚄</span> 1000</div>
+      <div class="mode" id="modeChip"></div>
+      <button class="icon-btn" id="rulesBtn" aria-label="Правила">?</button>
+      <button class="icon-btn" id="soundBtn" aria-label="Звук">🔊</button>
+    </header>
+
+    <div id="conn" class="conn hidden">Переподключение…</div>
+
+    <!-- экран загрузки / нет комнаты -->
+    <section id="screenMsg" class="screen msg-screen">
+      <div class="msg-card">
+        <div class="big-die">⚄</div>
+        <h2 id="msgTitle">Подключаемся…</h2>
+        <p id="msgText"></p>
+      </div>
+    </section>
+
+    <!-- лобби -->
+    <section id="screenLobby" class="screen hidden">
+      <div class="card">
+        <h2>Игроки <span class="muted" id="lobbyCount"></span></h2>
+        <ul class="lobby-players" id="lobbyPlayers"></ul>
+        <button class="btn ghost hidden" id="joinBtn">Присоединиться</button>
+      </div>
+      <div class="card">
+        <h2>Режим</h2>
+        <div class="field-label">Бочка</div>
+        <div class="segmented" id="segBarrel">
+          <button data-v="none">Без бочки</button>
+          <button data-v="points">По очкам</button>
+          <button data-v="open">Открытая</button>
+        </div>
+        <p class="setting-desc" id="barrelDesc"></p>
+        <div class="field-label">Таймер на действие</div>
+        <div class="segmented" id="segTimer">
+          <button data-v="0">Выкл</button>
+          <button data-v="30">30 с</button>
+          <button data-v="60">60 с</button>
+          <button data-v="120">120 с</button>
+        </div>
+        <p class="setting-desc muted" id="ownerNote"></p>
+      </div>
+      <div class="lobby-actions">
+        <button class="btn primary" id="startBtn">Начать игру</button>
+        <button class="btn ghost" id="leaveLobbyBtn">Выйти</button>
+      </div>
+    </section>
+
+    <!-- игра -->
+    <section id="screenGame" class="screen hidden">
+      <div class="players" id="players"></div>
+
+      <div class="table-wrap">
+        <div id="table3d"></div>
+        <div class="roll-badge hidden" id="rollBadge"></div>
+        <div class="reactions-layer" id="reactionsLayer"></div>
+      </div>
+
+      <div class="turn-panel">
+        <div class="turn-head">
+          <div class="turn-who" id="turnWho"></div>
+          <div class="turn-points"><span class="label">в ходу</span><span id="turnPoints">0</span></div>
+        </div>
+        <div class="kept-row" id="keptRow"></div>
+        <div class="hint" id="hint"></div>
+        <div class="timer-bar hidden" id="timerBar"><div id="timerFill"></div></div>
+        <div class="actions" id="actions">
+          <button class="btn primary big" id="rollBtn">Бросить</button>
+          <button class="btn gold big" id="stopBtn">Записать</button>
+        </div>
+      </div>
+
+      <div class="react-bar" id="reactBar"></div>
+
+      <details class="log">
+        <summary>Журнал <span class="muted" id="logLast"></span></summary>
+        <ul id="logList"></ul>
+      </details>
+
+      <div class="owner-tools" id="ownerTools">
+        <button class="btn tiny ghost" id="leaveGameBtn">Выйти из игры</button>
+        <button class="btn tiny ghost hidden" id="endBtn">Завершить игру</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- большие объявления -->
+  <div id="toast" class="toast hidden"><div class="toast-emoji" id="toastEmoji"></div><div class="toast-text" id="toastText"></div></div>
+
+  <!-- итоги -->
+  <div id="finishModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="trophy">🏆</div>
+      <h2 id="finishTitle"></h2>
+      <ol class="ranking" id="ranking"></ol>
+      <button class="btn primary" id="rematchBtn">Реванш</button>
+      <button class="btn ghost" id="closeFinishBtn">Посмотреть стол</button>
+    </div>
+  </div>
+
+  <!-- правила -->
+  <div id="rulesModal" class="modal hidden">
+    <div class="modal-card rules">
+      <h2>Правила «1000»</h2>
+      <div id="rulesBody"></div>
+      <button class="btn primary" id="closeRulesBtn">Понятно</button>
+    </div>
+  </div>
+
+  <div id="errorToast" class="error-toast hidden"></div>
+
+  <script type="module" src="/static/app.js?v=1"></script>
+</body>
+</html>
