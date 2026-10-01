@@ -109,6 +109,18 @@ def test_bolts_penalty():
     assert p1.score == 5 and p1.bolts == 0
 
 
+def test_commit_resets_bolts():
+    g, rng = make()
+    p1 = g.player(1)
+    p1.score, p1.opened, p1.bolts = 105, True, 2
+    g._reset_turn()
+    turn(g, rng, (5, 2, 3, 3, 6))  # +5 — минимальная запись
+    assert p1.score == 110 and p1.bolts == 0
+    turn(g, rng, (2, 3, 4, 6, 6), stop=False)  # P2
+    turn(g, rng, (2, 3, 4, 6, 6), stop=False)  # P1: болт 1, а не третий
+    assert p1.score == 110 and p1.bolts == 1
+
+
 # ---------- ямы ----------
 
 def test_pit():
@@ -139,8 +151,8 @@ def test_samosval():
     g, rng = make()
     g.player(1).score, g.player(1).opened = 495, True
     g._reset_turn()
-    turn(g, rng, (6, 6, 6, 2, 3))
-    assert g.player(1).score == 0 and g.player(1).opened
+    turn(g, rng, (6, 6, 6, 2, 3), stop=False)  # 495 + 60 = 555 — самосвал сразу
+    assert g.player(1).score == 0 and g.player(1).opened and g.cur.uid == 2
 
 
 def test_overtake_and_samosval_by_penalty():
@@ -181,7 +193,7 @@ def test_barrel_points_cap_and_win():
     p1 = g.player(1)
     p1.score, p1.opened = 750, True
     g._reset_turn()
-    turn(g, rng, (1, 1, 1, 1, 1), (2, 2, 2, 3, 4), (1, 2))  # 750+1000+20+10 -> 880
+    turn(g, rng, (1, 1, 1, 2, 3), (1, 1), (1, 1, 1, 1, 1), (2, 2, 2, 3, 4), (1, 2))  # 750+1150 -> 880
     assert p1.score == 880 and p1.on_barrel
     turn(g, rng, (2, 3, 4, 6, 6), stop=False)  # P2
     rng.push(1, 1, 1, 2, 3)  # +100
@@ -228,6 +240,60 @@ def test_barrel_both_sit():
     turn(g, rng, (1, 1, 1, 2, 3))  # +100 -> 960, обгоняет P1 -> 850, слетает
     assert p2.on_barrel and p2.score == 960
     assert p1.score == 850 and not p1.on_barrel and p1.barrel_falls == 0
+
+
+def test_barrel_win_over_1000():
+    g, rng = make(barrel="points")
+    p1 = g.player(1)
+    p1.score, p1.opened, p1.on_barrel = 900, True, True
+    g._reset_turn()
+    turn(g, rng, (1, 1, 1, 1, 3), stop=False)  # +200 -> 1100: на бочке перебор разрешён
+    assert g.phase == "finished" and g.winner == 1
+
+
+def test_points_exact_1000_without_barrel_is_not_win():
+    g, rng = make(barrel="points")
+    p1 = g.player(1)
+    p1.score, p1.opened = 870, True
+    g._reset_turn()
+    turn(g, rng, (1, 1, 1, 2, 3), (1, 1), (1, 2, 3, 4, 6))  # +130 -> 1000 мимо бочки -> 880
+    assert g.winner is None and p1.score == 880 and p1.on_barrel
+
+
+# ---------- самосвал посреди хода, пять единиц ----------
+
+def test_samosval_mid_turn():
+    g, rng = make()
+    p1 = g.player(1)
+    p1.score, p1.opened = 500, True
+    g._reset_turn()
+    turn(g, rng, (5, 5, 5, 2, 3), stop=False)  # +50 -> 550
+    assert g.cur.uid == 1
+    rng.push(5, 3)  # +5 -> ровно 555
+    g.roll(1)
+    assert p1.score == 0 and g.cur.uid == 2 and g.turn_points == 0
+    with pytest.raises(GameError):
+        g.roll(1)
+
+
+def test_five_ones_first_roll_wins():
+    g, rng = make(barrel="open")
+    p1 = g.player(1)
+    p1.score, p1.opened = 300, True
+    g._reset_turn()
+    turn(g, rng, (1, 1, 1, 1, 1), stop=False)
+    assert g.phase == "finished" and g.winner == 1
+
+
+def test_five_ones_not_first_roll():
+    g, rng = make(barrel="open")
+    p1 = g.player(1)
+    p1.score, p1.opened = 0, True
+    g._reset_turn()
+    turn(g, rng, (5, 2, 3, 3, 6), (5, 2, 3, 6), (5, 2, 6), (5, 2), (5,), stop=False)  # +25, все сыграли
+    rng.push(1, 1, 1, 1, 1)  # пять единиц, но не первым броском: 25 + 1000 -> перебор
+    g.roll(1)
+    assert g.winner is None and p1.dots == 1
 
 
 # ---------- открытая бочка ----------

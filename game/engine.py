@@ -236,7 +236,14 @@ class Game:
             self._ev("hot", f"🔥 {p.name}: все кубики сыграли — бросает все 5 заново", uid, notable=False)
 
         total = p.score + self.turn_points
-        if self.barrel == "none" and total >= TARGET:
+        if self.rolls_in_turn == 1 and dice == [1] * 5:
+            self._win(p, total, f"🎯 {p.name}: ПЯТЬ ЕДИНИЦ с первого броска — ПОБЕДА!")
+        elif total == SAMOSVAL:
+            # самосвал посреди хода: ход сразу заканчивается, дальше бросать нельзя
+            p.opened = True
+            self._set_score(p, SAMOSVAL)
+            self._next_turn()
+        elif self.barrel == "none" and total >= TARGET:
             self._win(p, total)
         elif self.barrel == "points" and p.on_barrel and total >= TARGET:
             self._win(p, total)
@@ -255,6 +262,7 @@ class Game:
         old = p.score
         new = old + self.turn_points
         p.opened = True
+        p.bolts = 0  # любая запись очков сбрасывает болты
         p.st["best_turn"] = max(p.st["best_turn"], self.turn_points)
         capped = False
         if self.barrel == "points" and new >= TARGET:
@@ -352,13 +360,13 @@ class Game:
             self._ev("zero", f"💨 {p.name}: пусто ({why}){lost}", p.uid, notable=False)
         self._next_turn()
 
-    def _win(self, p: Player, total: int):
+    def _win(self, p: Player, total: int, text: str | None = None):
         p.st["best_turn"] = max(p.st["best_turn"], self.turn_points)
         p.score = total
         p.opened = True
         self.phase = "finished"
         self.winner = p.uid
-        self._ev("win", f"🏆 {p.name} набрал(а) {total} и ПОБЕДИЛ(А)!", p.uid)
+        self._ev("win", text or f"🏆 {p.name} набрал(а) {total} и ПОБЕДИЛ(А)!", p.uid)
 
     def _next_turn(self):
         if self.phase != "play":

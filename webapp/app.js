@@ -34,10 +34,6 @@ if (tg) {
   tg.ready();
   tg.expand();
   tg.disableVerticalSwipes?.();
-  try {
-    tg.setHeaderColor?.('#0d1712');
-    tg.setBackgroundColor?.('#0d1712');
-  } catch (e) { /* старые клиенты */ }
 }
 
 const table = new DiceTable($('table3d'), {
@@ -634,8 +630,9 @@ function renderRules() {
       <li><b>Открытие:</b> первая запись — минимум 50 за ход.</li>
       <li><b>Ямы</b> 200–299 и 600–699: стоять в яме можно, но выбраться нужно за один ход (до 300 / 700), иначе очки хода сгорают.</li>
       <li><b>Обгон:</b> обогнал — у обогнанного −50 (у кого 0 — не штрафуют).</li>
-      <li><b>Болты:</b> пустой бросок = болт, 3 болта = −100. Не считаются до открытия, в яме и на бочке.</li>
-      <li><b>Самосвал:</b> ровно 555 любым путём — счёт обнуляется.</li>
+      <li><b>Болты:</b> пустой бросок = болт, 3 болта = −100. Любая запись очков сбрасывает болты. Не считаются до открытия, в яме и на бочке.</li>
+      <li><b>Самосвал:</b> ровно 555 любым путём — счёт обнуляется. Попал на 555 прямо по ходу бросков — ход сразу заканчивается.</li>
+      <li><b>Пять единиц</b> первым броском хода — сразу победа.</li>
     </ul>
     <h3>Бочка</h3>
     <ul>
@@ -701,5 +698,9 @@ onTap('soundBtn', () => {
   syncSoundBtn();
 });
 syncSoundBtn();
+function syncThemeBtn() { $('themeBtn').textContent = window.appTheme?.get() === 'light' ? '🌙' : '☀️'; }
+onTap('themeBtn', () => window.appTheme?.toggle());
+document.addEventListener('themechange', syncThemeBtn);
+syncThemeBtn();
 
 connect();
