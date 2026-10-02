@@ -51,27 +51,29 @@ function easeOutBounce(x) {
 const easeOutCubic = (x) => 1 - Math.pow(1 - x, 3);
 const IMPACTS = [[1 / 2.75, 1], [2 / 2.75, 0.45], [2.5 / 2.75, 0.2]];
 
-function faceTexture(v, renderer) {
+const SKINS = {
+  ivory: { bg: ['#fffdf6', '#e9e0c8'], pip: ['#3a3a3a', '#0b0b0b'], one: ['#ff5a4f', '#a3150f'], metal: 0, rough: 0.35 },
+  gold: { bg: ['#fff1a8', '#d9a520'], pip: ['#5a3a00', '#241600'], one: ['#ff5a4f', '#8a0f08'], metal: 0.55, rough: 0.22 },
+};
+
+function faceTexture(v, renderer, skin = 'ivory') {
+  const sk = SKINS[skin];
   const s = 256;
   const c = document.createElement('canvas');
   c.width = c.height = s;
   const g = c.getContext('2d');
   const grad = g.createRadialGradient(s * 0.35, s * 0.3, 10, s / 2, s / 2, s * 0.75);
-  grad.addColorStop(0, '#fffdf6');
-  grad.addColorStop(1, '#e9e0c8');
+  grad.addColorStop(0, sk.bg[0]);
+  grad.addColorStop(1, sk.bg[1]);
   g.fillStyle = grad;
   g.fillRect(0, 0, s, s);
   for (const [px, py] of PIPS[v]) {
     const r = v === 1 ? 34 : 22;
     const x = px * s, y = py * s;
     const pg = g.createRadialGradient(x - r * 0.3, y - r * 0.3, 1, x, y, r);
-    if (v === 1) {
-      pg.addColorStop(0, '#ff5a4f');
-      pg.addColorStop(1, '#a3150f');
-    } else {
-      pg.addColorStop(0, '#3a3a3a');
-      pg.addColorStop(1, '#0b0b0b');
-    }
+    const col = v === 1 ? sk.one : sk.pip;
+    pg.addColorStop(0, col[0]);
+    pg.addColorStop(1, col[1]);
     g.fillStyle = pg;
     g.beginPath();
     g.arc(x, y, r, 0, Math.PI * 2);
@@ -148,6 +150,8 @@ export class DiceTable {
     this.scene.add(table);
 
     const textures = FACE_ORDER.map((v) => faceTexture(v, this.renderer));
+    this.skinTextures = { ivory: textures };
+    this.skin = 'ivory';
     const geo = new RoundedBoxGeometry(DIE, DIE, DIE, 5, 0.13);
     this.dice = [];
     for (let i = 0; i < 5; i++) {
@@ -171,6 +175,25 @@ export class DiceTable {
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
     this.showStatic([1, 5, 1, 5, 1], [], 12345);
+  }
+
+  /** Скин кубиков: 'ivory' (обычные) или 'gold' (золотые кубики создателя). */
+  setSkin(name) {
+    if (!SKINS[name] || name === this.skin) return;
+    if (!this.skinTextures[name]) {
+      this.skinTextures[name] = FACE_ORDER.map((v) => faceTexture(v, this.renderer, name));
+    }
+    const tex = this.skinTextures[name];
+    for (const d of this.dice) {
+      d.mats.forEach((m, i) => {
+        m.map = tex[i];
+        m.metalness = SKINS[name].metal;
+        m.roughness = SKINS[name].rough;
+        m.needsUpdate = true;
+      });
+    }
+    this.skin = name;
+    this.dirty = true;
   }
 
   _resize() {
