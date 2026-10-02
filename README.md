@@ -57,6 +57,38 @@ cp .env.example .env
 
 > ⚠️ (только для ngrok) Бесплатный ngrok при первом открытии показывает страницу-предупреждение «You are about to visit…». Каждому игроку нужно один раз нажать **Visit Site**, дальше она не появляется (примерно неделю).
 
+## Свой сервер (127132.koara.live)
+
+На сервере уже есть nginx с HTTPS, поэтому туннель не нужен: nginx передаёт запросы игре на `127.0.0.1:8080`.
+
+1. **Останови игру на компьютере** (`Ctrl+C` в окне `./run.sh`). Бот может работать только в одном месте, иначе Telegram выдаст ошибку `Conflict`.
+2. **Скопируй проект на сервер** (из папки проекта в WSL; `data/` — это статистика, пресеты и ачивки):
+   ```bash
+   rsync -av --exclude .venv --exclude .git --exclude __pycache__ ./ root@108.165.174.236:/opt/1000-costi/
+   ```
+3. **Поправь `.env` на сервере** (`nano /opt/1000-costi/.env`):
+   ```
+   BOT_TOKEN=...            # тот же токен
+   PUBLIC_URL=https://127132.koara.live
+   TUNNEL=none
+   ENTRY_MODE=direct
+   HOST=127.0.0.1
+   PORT=8080
+   ```
+   Строку `NGROK_DOMAIN` удали или закомментируй.
+4. **Установи и запусти службу**: `bash /opt/1000-costi/deploy/setup.sh`. Игра будет работать постоянно и сама перезапустится после сбоя или перезагрузки сервера.
+5. **Подключи nginx.** Открой конфиг сайта с HTTPS (обычно `/etc/nginx/sites-enabled/default`). В блоке `server`, где есть `listen 443 ssl`, замени `location / { ... }` на содержимое `deploy/nginx-locations.conf`. Затем выполни `nginx -t && systemctl reload nginx`.
+6. **BotFather**: `/mybots` → бот → **Bot Settings** → **Configure Mini App** → **Enable Mini App** → `https://127132.koara.live/`. После этого кнопка «Играть» в группе открывает игру сразу, без лички.
+7. **Проверь**: `https://127132.koara.live/` в браузере показывает «Нужен Telegram», а в группе `/newgame` → «Играть» открывается игра.
+
+Полезные команды на сервере:
+```bash
+journalctl -u 1000-costi -f          # лог в реальном времени
+systemctl restart 1000-costi         # перезапуск
+# обновление: снова rsync (без .env и data!) и bash deploy/setup.sh
+rsync -av --exclude .venv --exclude .git --exclude __pycache__ --exclude .env --exclude data ./ root@108.165.174.236:/opt/1000-costi/
+```
+
 ## Как играть
 
 1. В группе: `/newgame` — бот пришлёт сообщение с кнопкой **«Играть»**.
