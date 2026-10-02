@@ -16,9 +16,11 @@ id costi >/dev/null 2>&1 || useradd --system --home "$APP" --shell /usr/sbin/nol
 [ -x .venv/bin/python ] || python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
+# код принадлежит root (так работает git pull), служба пишет только в data/
 mkdir -p data
-chown -R costi:costi "$APP"
-chmod 600 .env
+chown -R costi:costi data
+chown root:costi .env
+chmod 640 .env
 
 cp deploy/1000-costi.service /etc/systemd/system/1000-costi.service
 systemctl daemon-reload
