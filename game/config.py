@@ -31,3 +31,5 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"
 MAX_PLAYERS = 8
 WEBAPP_DIR = ROOT / "webapp"
+# Администраторы бота (админ-панель): id пользователей Telegram через запятую
+ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "621983693").replace(" ", "").split(",") if x}

@@ -1,4 +1,4 @@
-"""Комнаты: лобби, партия, таймер, рассылка состояния по WebSocket."""
+"""Комнаты: лобби, партия, таймер, рассылка состояния по WebSocket, админ-управление."""
 from __future__ import annotations
 
 import asyncio
@@ -6,36 +6,66 @@ import json
 import logging
 import secrets
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import MAX_PLAYERS
-from .engine import BARREL_MODES, Game, GameError
+from . import config
+from .achievements import ACHIEVEMENTS, career_ids, end_ids, moment_ids
+from .engine import Game, GameError
+from .rules import BUILTIN_PRESETS, RulesError, builtin_label, describe, normalize, same, short_title
 
 if TYPE_CHECKING:
-    from .stats import Stats
+    from .stats import Presets, Stats
 
 log = logging.getLogger(__name__)
 
+MAX_PLAYERS = config.MAX_PLAYERS
 TIMER_OPTIONS = (0, 30, 60, 120)
 ANIMATION_GRACE = 2.5  # секунд на анимацию броска сверх таймера
 REACTIONS = ("😂", "😱", "👏", "🔥", "😭", "🤡", "💩", "🍀")
+STICKERS = {
+    "pit": ("🕳", "В ЯМУ!"),
+    "bolt": ("🔩", "БОЛТ!"),
+    "lucky": ("🍀", "НУ ТЫ И ВЕЗУЧИЙ"),
+    "fart": ("🤑", "ФАРТИТ!"),
+    "truck": ("🚛", "САМОСВАЛ ЕДЕТ"),
+    "go": ("🔥", "ДАВАЙ-ДАВАЙ!"),
+    "gg": ("🤝", "ГГ"),
+    "cheat": ("🤨", "ЖУЛЬНИЧАЕШЬ?"),
+    "wait": ("🐢", "НУ ТЫ ДОЛГО?"),
+    "risk": ("🎲", "РИСКНИ!"),
+}
+GAME_ACTIONS = {"roll", "stop", "order_roll", "order_roll_all"}
+MAX_SNAPSHOTS = 40
+
+
+def is_admin(uid: int | None) -> bool:
+    return uid in config.ADMIN_IDS
 
 
 class Room:
-    def __init__(self, manager: RoomManager, chat_id: int | None, owner_uid: int, owner_name: str):
+    def __init__(self, manager: RoomManager, chat_id: int | None, owner_uid: int, owner_name: str,
+                 rules: dict | None = None, preset_name: str | None = None):
         self.manager = manager
         self.id = secrets.token_urlsafe(6).replace("-", "x").replace("_", "y")
         self.chat_id = chat_id
         self.owner = owner_uid
-        self.settings = {"barrel": "none", "timer": 0}
+        self.timer = 0
+        self.rules = normalize(rules)
+        self._custom_name = preset_name  # название загруженного сохранённого пресета
+        self._custom_rules = self.rules if preset_name else None
         self.status = "lobby"  # lobby | game | finished | cancelled
         self.members: dict[int, str] = {owner_uid: owner_name}
         self.game: Game | None = None
         self.clients: dict = {}  # ws -> uid
         self.deadline: float | None = None
+        self.paused = False
         self._timer_task: asyncio.Task | None = None
         self._timer_token = 0
         self._last_react: dict[int, float] = {}
+        self._announced: dict[int, set] = {}
+        self.snapshots: list[tuple[int, Game]] = []
+        self.audit: list[dict] = []
         self.lobby_msg_id: int | None = None
         self.updated = time.time()
 
@@ -45,19 +75,53 @@ class Room:
     def active(self) -> bool:
         return self.status in ("lobby", "game")
 
+    @property
+    def settings(self) -> dict:
+        """Короткие настройки (совместимость со старым клиентом и сообщениями бота)."""
+        return {"barrel": self.rules["barrel"], "timer": self.timer}
+
+    def preset_name(self) -> str:
+        key = builtin_label(self.rules)
+        if key:
+            return BUILTIN_PRESETS[key][0]
+        if self._custom_name and self._custom_rules is not None and same(self.rules, self._custom_rules):
+            return self._custom_name
+        return "Свои"
+
+    def players_uids(self) -> set[int]:
+        if self.game and self.status != "lobby":
+            return {p.uid for p in self.game.players}
+        return set(self.members)
+
     def state(self) -> dict:
+        players = self.players_uids()
+        online = set(self.clients.values())
+        # админ, зашедший посмотреть, не светится среди зрителей
+        visible = {u for u in online if u in players or not is_admin(u)}
+        prefs = self.manager.admin_prefs
         return {
             "id": self.id,
             "status": self.status,
             "owner": self.owner,
             "settings": self.settings,
+            "rules": self.rules,
+            "rules_text": describe(self.rules),
+            "rules_title": short_title(self.rules),
+            "preset": self.preset_name(),
             "members": [{"uid": u, "name": n} for u, n in self.members.items()],
-            "online": sorted(set(self.clients.values())),
+            "online": sorted(visible),
+            "spectators": len(visible - players),
+            "paused": self.paused,
             "game": self.game.to_dict() if self.game else None,
             "deadline": int(self.deadline * 1000) if self.deadline else None,
             "server_now": int(time.time() * 1000),
             "max_players": MAX_PLAYERS,
             "reactions": REACTIONS,
+            "stickers": {k: list(v) for k, v in STICKERS.items()},
+            "cosmetics": {
+                "gold": [u for u in config.ADMIN_IDS if prefs.get(u, {}).get("gold", True)],
+                "badge": [u for u in config.ADMIN_IDS if prefs.get(u, {}).get("badge", True)],
+            },
         }
 
     async def broadcast(self) -> None:
@@ -69,6 +133,14 @@ class Room:
             except Exception:  # noqa: BLE001 — клиент отвалился
                 self.clients.pop(ws, None)
 
+    async def send_all(self, obj: dict) -> None:
+        payload = json.dumps(obj, ensure_ascii=False)
+        for ws in list(self.clients):
+            try:
+                await ws.send_str(payload)
+            except Exception:  # noqa: BLE001
+                self.clients.pop(ws, None)
+
     async def send_to(self, ws, obj: dict) -> None:
         try:
             await ws.send_str(json.dumps(obj, ensure_ascii=False))
@@ -77,9 +149,10 @@ class Room:
 
     # ---------- подключения ----------
 
-    async def attach(self, ws, uid: int, name: str) -> None:
+    async def attach(self, ws, uid: int, name: str, spectate: bool = False) -> None:
         self.clients[ws] = uid
-        if self.status == "lobby" and uid not in self.members and len(self.members) < MAX_PLAYERS:
+        if (not spectate and self.status == "lobby" and uid not in self.members
+                and len(self.members) < MAX_PLAYERS):
             self.members[uid] = name
             await self.manager.notify("lobby_update", self)
         await self.broadcast()
@@ -88,22 +161,65 @@ class Room:
         if self.clients.pop(ws, None) is not None:
             await self.broadcast()
 
+    # ---------- журнал действий (для админа) ----------
+
+    def _audit(self, uid: int, name: str, action: str, detail: str = "") -> None:
+        entry = {"t": time.time(), "uid": uid, "name": name, "action": action, "detail": detail}
+        self.audit.append(entry)
+        if len(self.audit) > 500:
+            self.audit = self.audit[-500:]
+        self.manager.write_audit(self, entry)
+
     # ---------- действия ----------
 
     async def handle(self, uid: int, name: str, msg: dict, ws) -> None:
         action = msg.get("type")
         is_owner = uid == self.owner
+        admin = is_admin(uid)
         events: list[dict] = []
 
         if action == "react":
             emoji = msg.get("emoji")
-            now = time.time()
-            if emoji in REACTIONS and now - self._last_react.get(uid, 0) > 0.7:
-                self._last_react[uid] = now
-                payload = {"type": "reaction", "uid": uid, "name": name, "emoji": emoji}
-                for c in list(self.clients):
-                    await self.send_to(c, payload)
+            if emoji in REACTIONS and self._rate_ok(uid, 0.7):
+                await self.send_all({"type": "reaction", "uid": uid, "name": name, "emoji": emoji})
             return
+
+        if action == "sticker":
+            sid = msg.get("id")
+            if sid in STICKERS and self._rate_ok(uid, 2.0):
+                emoji, text = STICKERS[sid]
+                await self.send_all({"type": "sticker", "uid": uid, "name": name, "id": sid,
+                                     "emoji": emoji, "text": text})
+            return
+
+        if action == "my_achievements":
+            await self.send_to(ws, {"type": "achievements", "list": self.manager.achievements_of(uid)})
+            return
+
+        if action == "my_presets":
+            await self.send_to(ws, {"type": "presets", "list": self.manager.presets_of(uid)})
+            return
+
+        if action == "save_preset":
+            pname = str(msg.get("name") or "").strip()[:40] or "Мои правила"
+            if not self.manager.presets:
+                raise GameError("пресеты недоступны")
+            pid = self.manager.presets.create(pname, self.rules, uid)
+            if self.preset_name() == "Свои":
+                self._custom_name, self._custom_rules = pname, self.rules
+            await self.send_to(ws, {"type": "preset_saved", "id": pid, "name": pname,
+                                    "link": self.manager.preset_link(pid)})
+            await self.broadcast()
+            return
+
+        if action == "admin":
+            if not admin:
+                raise GameError("нет доступа")
+            await self._admin(uid, name, msg, ws)
+            return
+
+        if action in GAME_ACTIONS and self.paused:
+            raise GameError("игра на паузе")
 
         if action == "join":
             if self.status != "lobby":
@@ -115,35 +231,56 @@ class Room:
                 await self.manager.notify("lobby_update", self)
 
         elif action == "settings":
-            self._require(is_owner and self.status == "lobby", "настройки меняет создатель в лобби")
-            barrel = msg.get("barrel", self.settings["barrel"])
-            timer = int(msg.get("timer", self.settings["timer"]))
-            if barrel not in BARREL_MODES or timer not in TIMER_OPTIONS:
-                raise GameError("неверные настройки")
-            self.settings = {"barrel": barrel, "timer": timer}
+            self._require((is_owner and self.status == "lobby") or admin, "настройки меняет создатель в лобби")
+            if "timer" in msg:
+                timer = int(msg["timer"])
+                if timer not in TIMER_OPTIONS:
+                    raise GameError("неверный таймер")
+                self.timer = timer
+            if "barrel" in msg:
+                rules = dict(self.rules, barrel=msg["barrel"])
+                if msg["barrel"] == "knock" and self.rules["barrel"] != "knock":
+                    rules["barrel_start"] = 850
+                elif msg["barrel"] == "points" and self.rules["barrel"] == "knock":
+                    rules["barrel_start"] = 880
+                self._set_rules(rules)
+            await self.manager.notify("lobby_update", self)
+
+        elif action == "rules":
+            self._require((is_owner and self.status == "lobby") or admin, "правила меняет создатель в лобби")
+            self._set_rules(msg.get("rules"))
+            self._audit(uid, name, "rules", "правила изменены")
+            await self.manager.notify("lobby_update", self)
+
+        elif action == "preset":
+            self._require((is_owner and self.status == "lobby") or admin, "пресет выбирает создатель в лобби")
+            self.load_preset(str(msg.get("id") or ""))
             await self.manager.notify("lobby_update", self)
 
         elif action == "start":
             self._require(is_owner and self.status == "lobby", "начать может только создатель")
             self._require(len(self.members) >= 1, "нет игроков")
-            self.game = Game(list(self.members.items()), barrel=self.settings["barrel"])
+            self.game = Game(list(self.members.items()), rules=self.rules)
             self.status = "game"
+            self.snapshots = []
+            self._announced = {}
+            self._audit(uid, name, "start", self.preset_name())
             await self.manager.notify("game_started", self)
 
-        elif action == "order_roll":
-            events = self._game().order_roll(uid)
-
-        elif action == "order_roll_all":
-            self._require(is_owner, "только создатель")
+        elif action in GAME_ACTIONS:
             g = self._game()
-            self._require(g.phase == "order", "очерёдность уже определена")
-            events = g.timeout()
-
-        elif action == "roll":
-            events = self._game().roll(uid)
-
-        elif action == "stop":
-            events = self._game().stop(uid)
+            self._snapshot()
+            if action == "order_roll":
+                events = g.order_roll(uid)
+            elif action == "order_roll_all":
+                self._require(is_owner, "только создатель")
+                self._require(g.phase == "order", "очерёдность уже определена")
+                events = g.timeout()
+            elif action == "roll":
+                events = g.roll(uid)
+            else:
+                events = g.stop(uid)
+            self._audit_events(uid, name, action, events)
 
         elif action == "leave":
             await self._remove(uid)
@@ -152,12 +289,7 @@ class Room:
 
         elif action == "kick":
             self._require(is_owner, "исключать может только создатель")
-            target = int(msg.get("uid", 0))
-            self._require(target != self.owner, "нельзя исключить себя")
-            await self._remove(target)
-            for c, cu in list(self.clients.items()):
-                if cu == target:
-                    await self.send_to(c, {"type": "kicked"})
+            await self._kick(int(msg.get("uid", 0)))
             return
 
         elif action == "rematch":
@@ -179,6 +311,33 @@ class Room:
 
         await self._after(events)
 
+    def _rate_ok(self, uid: int, gap: float) -> bool:
+        now = time.time()
+        if now - self._last_react.get(uid, 0) <= gap:
+            return False
+        self._last_react[uid] = now
+        return True
+
+    def _set_rules(self, raw) -> None:
+        try:
+            rules = normalize(raw)
+        except RulesError as e:
+            raise GameError(str(e)) from None
+        self.rules = rules
+        if self.game:
+            self.game.set_rules(rules)
+
+    def load_preset(self, pid: str) -> None:
+        if pid in BUILTIN_PRESETS:
+            self._set_rules(BUILTIN_PRESETS[pid][1])
+            self._custom_name = self._custom_rules = None
+            return
+        preset = self.manager.presets.get(pid) if self.manager.presets else None
+        if not preset:
+            raise GameError("пресет не найден")
+        self._set_rules(preset["rules"])
+        self._custom_name, self._custom_rules = preset["name"], self.rules
+
     def _require(self, cond: bool, err: str) -> None:
         if not cond:
             raise GameError(err)
@@ -187,6 +346,33 @@ class Room:
         if self.status != "game" or not self.game:
             raise GameError("игра не идёт")
         return self.game
+
+    def _snapshot(self) -> None:
+        """Снимок перед первым действием хода — для «отменить последний ход»."""
+        g = self.game
+        if not g or g.phase != "play" or g.rolls_in_turn:
+            return
+        if self.snapshots and self.snapshots[-1][0] == g.turn_no:
+            return
+        self.snapshots.append((g.turn_no, g.snapshot()))
+        if len(self.snapshots) > MAX_SNAPSHOTS:
+            self.snapshots.pop(0)
+
+    def _audit_events(self, uid: int, name: str, action: str, events: list[dict]) -> None:
+        g = self.game
+        if action in ("roll", "order_roll") and g and g.last_roll and g.last_roll["uid"] == uid:
+            lr = g.last_roll
+            detail = " ".join(map(str, lr["dice"])) + f" → {lr['points']}" + (" (подкручено)" if lr.get("forced") else "")
+            self._audit(uid, name, action, detail)
+        else:
+            self._audit(uid, name, action, "; ".join(e["text"] for e in events if e["kind"] != "roll")[:300])
+
+    async def _kick(self, target: int) -> None:
+        self._require(target != self.owner or self.status != "lobby", "нельзя исключить создателя в лобби")
+        await self._remove(target)
+        for c, cu in list(self.clients.items()):
+            if cu == target:
+                await self.send_to(c, {"type": "kicked"})
 
     async def _remove(self, uid: int) -> None:
         if self.status == "lobby":
@@ -211,21 +397,120 @@ class Room:
         if self.game and self.status == "game":
             if events:
                 await self.manager.notify("game_events", self, events)
+            await self._check_achievements(final=False)
             if self.game.phase == "finished":
                 self.status = "finished"
                 self._cancel_timer()
                 if self.game.winner is not None:
                     self.manager.record(self)
+                    await self._check_achievements(final=True)
                 await self.manager.notify("game_over", self)
             else:
                 self._restart_timer()
         await self.broadcast()
+
+    async def _check_achievements(self, final: bool) -> None:
+        g = self.game
+        if not g or not self.manager.stats:
+            return
+        got = []
+        for p in g.players:
+            ids = set(moment_ids(p))
+            if final:
+                ids |= end_ids(g, p)
+                total = self.manager.stats.user_total(p.uid)
+                if total:
+                    ids |= career_ids(total)
+            done = self._announced.setdefault(p.uid, set())
+            for aid in sorted(ids - done):
+                done.add(aid)
+                if self.manager.stats.unlock(p.uid, aid):
+                    got.append((p, aid))
+        for p, aid in got:
+            emoji, title, desc = ACHIEVEMENTS[aid]
+            await self.send_all({"type": "achievement", "uid": p.uid, "name": p.name, "id": aid,
+                                 "emoji": emoji, "title": title, "desc": desc})
+        if got:
+            lines = [{"kind": "achievement", "notable": True,
+                      "text": f"🏅 {p.name}: ачивка {ACHIEVEMENTS[aid][0]} «{ACHIEVEMENTS[aid][1]}»"} for p, aid in got]
+            await self.manager.notify("game_events", self, lines)
 
     async def cancel(self) -> None:
         self.status = "cancelled"
         self._cancel_timer()
         await self.manager.notify("cancelled", self)
         await self.broadcast()
+
+    # ---------- админ ----------
+
+    async def _admin(self, uid: int, name: str, msg: dict, ws) -> None:
+        op = msg.get("op")
+        g = self.game
+        events: list[dict] = []
+        self._audit(uid, name, f"admin:{op}", json.dumps({k: v for k, v in msg.items() if k not in ("type", "op")},
+                                                         ensure_ascii=False)[:200])
+        if op == "audit":
+            await self.send_to(ws, {"type": "admin_audit", "list": self.audit[-200:]})
+            return
+        if op == "rooms":
+            await self.send_to(ws, {"type": "admin_rooms", "list": self.manager.rooms_overview()})
+            return
+        if op == "cosmetics":
+            prefs = self.manager.admin_prefs.setdefault(uid, {})
+            for k in ("gold", "badge"):
+                if k in msg:
+                    prefs[k] = bool(msg[k])
+            self.manager.save_admin_prefs()
+            await self.manager.broadcast_all()
+            return
+        if op == "announce":
+            text = str(msg.get("text") or "").strip()[:140]
+            if text:
+                await self.send_all({"type": "announce", "text": text})
+            return
+        if op == "end":
+            await self.cancel()
+            return
+        if op == "kick":
+            await self._kick(int(msg.get("uid", 0)))
+            return
+        if op in ("pause", "resume"):
+            self._require(self.status == "game", "игра не идёт")
+            self.paused = op == "pause"
+            if self.paused:
+                self._cancel_timer()
+            else:
+                self._restart_timer()
+            await self.broadcast()
+            return
+
+        g = self._game()
+        if op == "undo":
+            self._require(self.snapshots, "нечего отменять")
+            cur, started = g.turn_no, g.rolls_in_turn > 0 or g.phase != "play"
+            while self.snapshots and self.snapshots[-1][0] == cur and not started:
+                self.snapshots.pop()
+            self._require(self.snapshots, "нечего отменять")
+            _, snap = self.snapshots.pop()
+            g.restore_from(snap)
+        elif op == "set_score":
+            g.admin_set_score(int(msg.get("uid", 0)), int(msg.get("score", 0)))
+        elif op == "bolt":
+            events = g.admin_bolt(int(msg.get("uid", 0)))
+        elif op == "samosval":
+            events = g.admin_samosval(int(msg.get("uid", 0)))
+        elif op == "force":
+            dice = msg.get("dice") or []
+            try:
+                dice = [int(d) for d in dice]
+            except (TypeError, ValueError):
+                raise GameError("значения кубиков — числа от 1 до 6") from None
+            g.force_next(dice)
+            await self.send_to(ws, {"type": "admin_ok", "text": f"Следующий бросок: {' '.join(map(str, dice))}"})
+            return
+        else:
+            raise GameError("неизвестная команда")
+        await self._after(events)
 
     # ---------- таймер ----------
 
@@ -238,8 +523,8 @@ class Room:
 
     def _restart_timer(self) -> None:
         self._cancel_timer()
-        secs = self.settings["timer"]
-        if not secs or self.status != "game":
+        secs = self.timer
+        if not secs or self.status != "game" or self.paused:
             return
         self.deadline = time.time() + secs + ANIMATION_GRACE
         token = self._timer_token
@@ -250,25 +535,34 @@ class Room:
             await asyncio.sleep(delay)
         except asyncio.CancelledError:
             return
-        if token != self._timer_token or self.status != "game" or not self.game:
+        if token != self._timer_token or self.status != "game" or not self.game or self.paused:
             return
         self._timer_task = None
         try:
+            self._snapshot()
             events = self.game.timeout()
+            self._audit(0, "таймер", "timeout", "; ".join(e["text"] for e in events)[:300])
             await self._after(events)
         except Exception:  # noqa: BLE001
             log.exception("timer failed in room %s", self.id)
 
 
 class RoomManager:
-    def __init__(self, stats: Stats | None = None):
+    def __init__(self, stats: Stats | None = None, presets: Presets | None = None, data_dir: Path | None = None):
         self.rooms: dict[str, Room] = {}
         self.stats = stats
+        self.presets = presets
+        self.data_dir = data_dir
         self.notifier = None  # объект с async-методами lobby_update/game_started/...
+        self.bot_username: str | None = None
+        self.admin_prefs: dict[int, dict] = self._load_admin_prefs()
 
-    def create(self, chat_id: int | None, owner_uid: int, owner_name: str) -> Room:
+    # ---------- комнаты ----------
+
+    def create(self, chat_id: int | None, owner_uid: int, owner_name: str,
+               rules: dict | None = None, preset_name: str | None = None) -> Room:
         self.cleanup()
-        room = Room(self, chat_id, owner_uid, owner_name)
+        room = Room(self, chat_id, owner_uid, owner_name, rules=rules, preset_name=preset_name)
         self.rooms[room.id] = room
         return room
 
@@ -290,9 +584,74 @@ class RoomManager:
         res.sort(key=lambda r: (r.active, r.updated), reverse=True)
         return res
 
+    def rooms_overview(self) -> list[dict]:
+        res = []
+        for r in sorted(self.rooms.values(), key=lambda r: (r.active, r.updated), reverse=True):
+            if r.game and r.status != "lobby":
+                players = [f"{p.name} {p.score}" for p in r.game.players]
+            else:
+                players = list(r.members.values())
+            res.append({"id": r.id, "chat_id": r.chat_id, "status": r.status, "paused": r.paused,
+                        "owner": r.members.get(r.owner, ""), "players": players,
+                        "rules": short_title(r.rules), "updated": r.updated})
+        return res
+
+    async def broadcast_all(self) -> None:
+        for r in list(self.rooms.values()):
+            if r.clients:
+                await r.broadcast()
+
+    # ---------- статистика, ачивки, пресеты ----------
+
     def record(self, room: Room) -> None:
         if self.stats and room.chat_id is not None and room.game:
             self.stats.record_game(room.chat_id, room.game.players, room.game.winner)
+
+    def achievements_of(self, uid: int) -> list[dict]:
+        mine = self.stats.achievements(uid) if self.stats else {}
+        return [{"id": aid, "emoji": e, "title": t, "desc": d, "got": aid in mine}
+                for aid, (e, t, d) in ACHIEVEMENTS.items()]
+
+    def presets_of(self, uid: int) -> list[dict]:
+        res = [{"id": k, "name": v[0], "builtin": True} for k, v in BUILTIN_PRESETS.items()]
+        if self.presets:
+            res += [dict(p, builtin=False, link=self.preset_link(p["id"])) for p in self.presets.of_user(uid)]
+        return res
+
+    def preset_link(self, pid: str) -> str | None:
+        return f"https://t.me/{self.bot_username}?start=p_{pid}" if self.bot_username else None
+
+    # ---------- админ ----------
+
+    def _admin_file(self) -> Path | None:
+        return self.data_dir / "admin.json" if self.data_dir else None
+
+    def _load_admin_prefs(self) -> dict[int, dict]:
+        f = self._admin_file()
+        if f and f.exists():
+            try:
+                return {int(k): v for k, v in json.loads(f.read_text(encoding="utf-8")).items()}
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
+        return {}
+
+    def save_admin_prefs(self) -> None:
+        f = self._admin_file()
+        if f:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps(self.admin_prefs), encoding="utf-8")
+
+    def write_audit(self, room: Room, entry: dict) -> None:
+        if not self.data_dir:
+            return
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.data_dir / "audit.log", "a", encoding="utf-8") as f:
+                f.write(json.dumps(dict(entry, room=room.id, chat=room.chat_id), ensure_ascii=False) + "\n")
+        except OSError:
+            log.warning("не удалось записать audit.log")
+
+    # ---------- уведомления ----------
 
     async def notify(self, method: str, room: Room, *args) -> None:
         if not self.notifier or room.chat_id is None:

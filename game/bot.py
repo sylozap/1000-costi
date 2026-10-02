@@ -13,46 +13,24 @@ from aiogram.types import (BotCommand, BotCommandScopeAllGroupChats, BotCommandS
                            InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo)
 
 from . import config
+from .achievements import ACHIEVEMENTS
 from .auth import display_name
-from .engine import BARREL_START, TARGET
-from .rooms import Room, RoomManager
-from .stats import Stats
+from .engine import GameError
+from .rooms import Room, RoomManager, is_admin
+from .rules import BUILTIN_PRESETS, CLASSIC, describe, short_title
+from .stats import RATING_MIN_GAMES, Presets, Stats
 
 log = logging.getLogger(__name__)
 
-BARREL_TITLES = {
-    "none": "без бочки (до 1000+)",
-    "points": f"бочка по очкам ({BARREL_START})",
-    "open": "открытая бочка (ровно 1000)",
-}
 FLUSH_DELAY = 3.0  # сек: события копятся и уходят одним сообщением
 
-RULES_TEXT = f"""<b>🎲 Игра «1000» — правила</b>
 
-5 кубиков. Цель — набрать {TARGET} очков.
-
-<b>Очки за бросок</b> (комбинации — только в одном броске):
-• 1 = 10, 5 = 5
-• три одинаковых = номинал×10 (три единицы = 100)
-• четыре = номинал×20 (четыре единицы = 200)
-• пять = номинал×100 (пять единиц = 1000)
-• стрит 1‑2‑3‑4‑5 = 125, стрит 2‑3‑4‑5‑6 = 250
-
-<b>Ход.</b> Очковые кубики откладываются автоматически, остальные можно перебросить или записать набранное. Пустой бросок — очки хода сгорают. Если все 5 кубиков сыграли — обязательно бросаешь все 5 заново.
-
-<b>Открытие.</b> Первая запись — минимум 50 за ход.
-<b>Ямы</b> 200–299 и 600–699: попасть можно, но выбраться нужно за один ход (до 300/700), иначе очки хода сгорают.
-<b>Обгон.</b> Обогнал игрока — у него −50 (игроков с 0 не штрафуют).
-<b>Болты.</b> Пустой бросок = болт; 3 болта = −100. Любая запись очков сбрасывает болты. Не считаются до открытия, в яме и на бочке.
-<b>Самосвал.</b> Ровно 555 любым путём — счёт обнуляется. Попал на 555 прямо по ходу бросков — ход сразу заканчивается.
-<b>Пять единиц</b> первым броском хода — сразу победа.
-
-<b>Бочка</b> (выбирается при создании игры):
-• <i>без бочки</i> — побеждает набравший 1000+;
-• <i>по очкам</i> — с {BARREL_START}+ садишься на бочку (перебор мимо бочки → {BARREL_START}); за 3 своих хода нужно набрать до 1000 за один ход. Не вышло — падение −100; третье падение — счёт 0. На бочке могут сидеть несколько игроков;
-• <i>открытая</i> — нужно ровно 1000; перебор = ход сгорает + точка; 6 точек = −100; третий такой штраф — счёт 0.
-
-Очерёдность ходов разыгрывается бросками кубиков."""
+def rules_html(rules: dict, title: str = "🎲 Игра «1000» — правила") -> str:
+    parts = [f"<b>{escape(title)}</b>", "", "5 кубиков. Цель — набрать 1000 очков."]
+    for head, text in describe(rules):
+        parts.append(f"\n<b>{escape(head)}.</b> {escape(text)}")
+    parts.append("\nОчерёдность ходов разыгрывается бросками кубиков.")
+    return "\n".join(parts)
 
 
 def mention(uid: int, name: str) -> str:
@@ -85,10 +63,10 @@ class GroupNotifier:
     def lobby_text(self, room: Room) -> str:
         owner = room.members.get(room.owner, "?")
         players = "\n".join(f"  {i + 1}. {escape(n)}" for i, n in enumerate(room.members.values()))
-        timer = f"{room.settings['timer']} с на действие" if room.settings["timer"] else "без таймера"
+        timer = f"{room.timer} с на действие" if room.timer else "без таймера"
         return (f"🎲 <b>Игра «1000»</b>\n"
                 f"Создатель: {escape(owner)}\n"
-                f"Режим: {BARREL_TITLES[room.settings['barrel']]}, {timer}\n\n"
+                f"Правила: {escape(room.preset_name())} — {short_title(room.rules)}, {timer}\n\n"
                 f"Игроки ({len(room.members)}/{config.MAX_PLAYERS}):\n{players}\n\n"
                 f"Жми «Играть», чтобы присоединиться. Создатель запускает игру в приложении.")
 
@@ -119,7 +97,7 @@ class GroupNotifier:
             return
         players = ", ".join(escape(n) for n in room.members.values())
         text = (f"🎲 <b>Игра «1000» началась!</b>\n"
-                f"Режим: {BARREL_TITLES[room.settings['barrel']]}\nИгроки: {players}\n\n"
+                f"Правила: {escape(room.preset_name())} — {short_title(room.rules)}\nИгроки: {players}\n\n"
                 f"Сначала разыгрываем очерёдность — все бросают кубики.")
         try:
             await self.bot.edit_message_text(text, chat_id=room.chat_id, message_id=room.lobby_msg_id,
@@ -212,18 +190,32 @@ class GroupNotifier:
 def format_stats_rows(rows: list[dict]) -> str:
     lines = []
     for i, r in enumerate(rows):
-        lines.append(f"{i + 1}. <b>{escape(r.get('name', '?'))}</b> — побед {r['wins']} из {r['games']}\n"
+        games = r["games"]
+        rate = f"{round(100 * r['wins'] / games)}%" if games else "—"
+        mark = "" if games >= RATING_MIN_GAMES else " (мало игр для рейтинга)"
+        lines.append(f"{i + 1}. <b>{escape(r.get('name', '?'))}</b> — {rate} побед ({r['wins']} из {games}){mark}\n"
                      f"    🚛 {r['samosvals']} · 🔩 {r['bolt_penalties']} · 🛢💥 {r['barrel_falls']} · "
                      f"🏎 {r['overtakes']} · лучший ход {r['best_turn']}")
     return "\n".join(lines)
 
 
-def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier) -> Router:
+def format_achievements(stats: Stats, uid: int, name: str) -> str:
+    mine = stats.achievements(uid)
+    got = [f"{e} <b>{escape(t)}</b> — {escape(d)}" for aid, (e, t, d) in ACHIEVEMENTS.items() if aid in mine]
+    left = [f"▫️ {escape(t)} — {escape(d)}" for aid, (e, t, d) in ACHIEVEMENTS.items() if aid not in mine]
+    text = f"🏅 <b>Ачивки: {escape(name)}</b> ({len(got)}/{len(ACHIEVEMENTS)})\n\n"
+    text += "\n".join(got) if got else "Пока ни одной — всё впереди!"
+    if left:
+        text += "\n\n<i>Ещё не получены:</i>\n" + "\n".join(left)
+    return text
+
+
+def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier, presets: Presets | None = None) -> Router:
     router = Router()
     groups = F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP})
 
     @router.message(Command("newgame"), groups)
-    async def newgame(message: Message):
+    async def newgame(message: Message, command: CommandObject):
         user = message.from_user
         room = manager.active_in_chat(message.chat.id)
         if room:
@@ -232,6 +224,12 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier) ->
             return
         name = display_name(user.model_dump())
         room = manager.create(message.chat.id, user.id, name)
+        code = (command.args or "").strip().removeprefix("p_")
+        if code:
+            try:
+                room.load_preset(code if code in BUILTIN_PRESETS else code.upper())
+            except GameError:
+                await message.reply(f"Пресет «{escape(code)}» не найден — играем по классике.")
         await notifier.lobby_update(room)
 
     @router.message(Command("endgame"), groups)
@@ -255,8 +253,9 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier) ->
         if not rows:
             await message.reply("Ещё не сыграно ни одной партии. /newgame")
             return
-        await message.reply("📊 <b>Статистика чата</b>\n🚛 самосвалы · 🔩 штрафы за болты · 🛢💥 падения с бочки · "
-                            "🏎 обгоны\n\n" + format_stats_rows(rows))
+        await message.reply(f"📊 <b>Рейтинг чата</b> — по проценту побед (от {RATING_MIN_GAMES} партий)\n"
+                            "🚛 самосвалы · 🔩 штрафы за болты · 🛢💥 падения с бочки · 🏎 обгоны\n\n"
+                            + format_stats_rows(rows))
 
     @router.message(Command("stats"), F.chat.type == ChatType.PRIVATE)
     async def stats_private(message: Message):
@@ -268,11 +267,49 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier) ->
 
     @router.message(Command("rules"))
     async def rules(message: Message):
-        await message.answer(RULES_TEXT)
+        room = manager.active_in_chat(message.chat.id) if message.chat.type != ChatType.PRIVATE else None
+        if room:
+            await message.answer(rules_html(room.rules, f"🎲 Правила этой игры — {room.preset_name()}"))
+        else:
+            await message.answer(rules_html(CLASSIC))
+
+    @router.message(Command("achievements"))
+    async def achievements(message: Message):
+        user = message.from_user
+        await message.answer(format_achievements(stats, user.id, display_name(user.model_dump())))
+
+    @router.message(Command("admin"), F.chat.type == ChatType.PRIVATE)
+    async def admin_cmd(message: Message):
+        if not is_admin(message.from_user.id):
+            return
+        rooms = [r for r in manager.rooms_overview() if r["status"] in ("lobby", "game")]
+        if not rooms:
+            await message.answer("🛠 Активных игр нет.")
+            return
+        rows, lines = [], []
+        for r in rooms[:20]:
+            st = "лобби" if r["status"] == "lobby" else ("пауза" if r["paused"] else "идёт")
+            lines.append(f"• <code>{r['id']}</code> — {st}, {escape(r['rules'])}: {escape(', '.join(r['players']))}")
+            if config.PUBLIC_URL:
+                rows.append([InlineKeyboardButton(text=f"👀 {r['id']} ({st})", web_app=WebAppInfo(
+                    url=f"{config.PUBLIC_URL}/?room={r['id']}&spectate=1"))])
+        await message.answer("🛠 <b>Активные игры</b>\n" + "\n".join(lines),
+                             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
 
     @router.message(CommandStart(deep_link=True), F.chat.type == ChatType.PRIVATE)
     async def start_join(message: Message, command: CommandObject):
         arg = command.args or ""
+        if arg.startswith("p_") and presets:
+            preset = presets.get(arg[2:])
+            if not preset:
+                await message.answer("Пресет не найден — возможно, ссылка устарела.")
+                return
+            presets.add_to(message.from_user.id, arg[2:].upper())
+            await message.answer(
+                rules_html(preset["rules"], f"📋 Пресет «{preset['name']}»")
+                + f"\n\n✅ Пресет сохранён у тебя. Выбери его в лобби или напиши в группе "
+                  f"<code>/newgame {arg[2:].upper()}</code>")
+            return
         room = manager.get(arg.removeprefix("join_")) if arg.startswith("join_") else None
         if not room or not config.PUBLIC_URL:
             await help_cmd(message)
@@ -288,27 +325,30 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier) ->
             "1. Добавь меня в группу с друзьями.\n"
             "2. Напиши там /newgame — появится кнопка «Играть».\n"
             "3. Все жмут «Играть», создатель выбирает режим и запускает игру.\n\n"
-            "Команды: /newgame, /endgame, /stats, /rules")
+            "Команды: /newgame [код пресета], /endgame, /stats, /achievements, /rules")
 
     return router
 
 
-async def build_bot(manager: RoomManager, stats: Stats) -> tuple[Bot, Dispatcher]:
+async def build_bot(manager: RoomManager, stats: Stats, presets: Presets | None = None) -> tuple[Bot, Dispatcher]:
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     me = await bot.get_me()
     notifier = GroupNotifier(bot, me.username)
     manager.notifier = notifier
+    manager.bot_username = me.username
     dp = Dispatcher()
-    dp.include_router(build_router(manager, stats, notifier))
+    dp.include_router(build_router(manager, stats, notifier, presets))
     group_cmds = [
         BotCommand(command="newgame", description="Новая игра в 1000"),
         BotCommand(command="endgame", description="Завершить текущую игру"),
-        BotCommand(command="stats", description="Статистика чата"),
+        BotCommand(command="stats", description="Рейтинг чата"),
+        BotCommand(command="achievements", description="Мои ачивки"),
         BotCommand(command="rules", description="Правила"),
     ]
     private_cmds = [
         BotCommand(command="help", description="Как играть"),
         BotCommand(command="stats", description="Моя статистика"),
+        BotCommand(command="achievements", description="Мои ачивки"),
         BotCommand(command="rules", description="Правила"),
     ]
     try:
