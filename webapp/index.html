@@ -6,13 +6,15 @@
   <title>1000 — кости</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/theme.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=1">
+  <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
   <div id="app">
     <header class="topbar">
       <div class="brand"><span class="logo">⚄</span> 1000</div>
       <div class="mode" id="modeChip"></div>
+      <button class="icon-btn hidden" id="adminBtn" aria-label="Админ-панель">🛠</button>
+      <button class="icon-btn" id="achBtn" aria-label="Ачивки">🏅</button>
       <button class="icon-btn" id="rulesBtn" aria-label="Правила">?</button>
       <button class="icon-btn" id="themeBtn" aria-label="Тема">☀️</button>
       <button class="icon-btn" id="soundBtn" aria-label="Звук">🔊</button>
@@ -26,6 +28,7 @@
         <div class="big-die">⚄</div>
         <h2 id="msgTitle">Подключаемся…</h2>
         <p id="msgText"></p>
+        <button class="btn ghost hidden" id="msgAdminBtn">🛠 Комнаты</button>
       </div>
     </section>
 
@@ -37,14 +40,20 @@
         <button class="btn ghost hidden" id="joinBtn">Присоединиться</button>
       </div>
       <div class="card">
-        <h2>Режим</h2>
+        <h2>Правила <span class="preset-name" id="presetName"></span></h2>
+        <div class="chips" id="presetList"></div>
         <div class="field-label">Бочка</div>
         <div class="segmented" id="segBarrel">
-          <button data-v="none">Без бочки</button>
+          <button data-v="none">Нет</button>
           <button data-v="points">По очкам</button>
           <button data-v="open">Открытая</button>
+          <button data-v="knock">Со сбросом</button>
         </div>
-        <p class="setting-desc" id="barrelDesc"></p>
+        <ul class="rules-summary" id="rulesSummary"></ul>
+        <div class="row-btns">
+          <button class="btn ghost small" id="editRulesBtn">⚙️ Настроить</button>
+          <button class="btn ghost small" id="shareRulesBtn">🔗 Поделиться</button>
+        </div>
         <div class="field-label">Таймер на действие</div>
         <div class="segmented" id="segTimer">
           <button data-v="0">Выкл</button>
@@ -62,12 +71,15 @@
 
     <!-- игра -->
     <section id="screenGame" class="screen hidden">
+      <div class="spec-banner hidden" id="specBanner">👀 Ты зритель — смотри и болей</div>
       <div class="players" id="players"></div>
 
-      <div class="table-wrap">
+      <div class="table-wrap" id="tableWrap">
         <div id="table3d"></div>
+        <div class="fx-layer" id="fxLayer"></div>
         <div class="roll-badge hidden" id="rollBadge"></div>
         <div class="reactions-layer" id="reactionsLayer"></div>
+        <div class="pause-overlay hidden" id="pauseOverlay"><div>⏸</div>Пауза</div>
       </div>
 
       <div class="turn-panel">
@@ -82,9 +94,11 @@
           <button class="btn primary big" id="rollBtn">Бросить</button>
           <button class="btn gold big" id="stopBtn">Записать</button>
         </div>
+        <div class="risk hidden" id="riskLine"></div>
       </div>
 
       <div class="react-bar" id="reactBar"></div>
+      <div class="sticker-tray hidden" id="stickerTray"></div>
 
       <details class="log">
         <summary>Журнал <span class="muted" id="logLast"></span></summary>
@@ -98,6 +112,10 @@
     </section>
   </div>
 
+  <!-- эффекты поверх всего -->
+  <div class="fly-layer" id="flyLayer"></div>
+  <div id="announce" class="announce hidden"></div>
+
   <!-- большие объявления -->
   <div id="toast" class="toast hidden"><div class="toast-emoji" id="toastEmoji"></div><div class="toast-text" id="toastText"></div></div>
 
@@ -107,22 +125,112 @@
       <div class="trophy">🏆</div>
       <h2 id="finishTitle"></h2>
       <ol class="ranking" id="ranking"></ol>
+      <div class="finish-ach" id="finishAch"></div>
       <button class="btn primary" id="rematchBtn">Реванш</button>
       <button class="btn ghost" id="closeFinishBtn">Посмотреть стол</button>
     </div>
   </div>
 
-  <!-- правила -->
+  <!-- правила (просмотр) -->
   <div id="rulesModal" class="modal hidden">
     <div class="modal-card rules">
       <h2>Правила «1000»</h2>
+      <p class="muted center" id="rulesPreset"></p>
       <div id="rulesBody"></div>
       <button class="btn primary" id="closeRulesBtn">Понятно</button>
     </div>
   </div>
 
+  <!-- редактор правил -->
+  <div id="editModal" class="modal hidden">
+    <div class="modal-card editor">
+      <h2>Настройка правил</h2>
+      <p class="muted center" id="editNote"></p>
+      <div id="rulesForm"></div>
+      <div class="editor-actions">
+        <button class="btn ghost" id="editCancelBtn">Отмена</button>
+        <button class="btn primary" id="editSaveBtn">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- поделиться пресетом -->
+  <div id="shareModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Поделиться правилами</h2>
+      <p class="muted center">Пресет сохранится у тебя, а по ссылке его сможет взять любой.</p>
+      <input class="input" id="shareName" maxlength="40" placeholder="Название, например «Дачные»">
+      <button class="btn primary" id="shareSaveBtn">Сохранить и получить ссылку</button>
+      <div class="share-result hidden" id="shareResult">
+        <div class="share-code">Код: <b id="shareCode"></b></div>
+        <div class="share-link" id="shareLink"></div>
+        <button class="btn gold" id="shareSendBtn">📤 Отправить в Telegram</button>
+        <button class="btn ghost" id="shareCopyBtn">Скопировать ссылку</button>
+      </div>
+      <button class="btn ghost" id="shareCloseBtn">Закрыть</button>
+    </div>
+  </div>
+
+  <!-- ачивки -->
+  <div id="achModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>🏅 Ачивки <span class="muted" id="achCount"></span></h2>
+      <div class="ach-grid" id="achList"></div>
+      <button class="btn primary" id="achCloseBtn">Закрыть</button>
+    </div>
+  </div>
+
+  <!-- админ-панель -->
+  <div id="adminModal" class="modal hidden">
+    <div class="modal-card admin">
+      <h2>🛠 Админ-панель</h2>
+      <div class="tabs" id="adminTabs">
+        <button data-tab="game" class="on">Игра</button>
+        <button data-tab="rooms">Комнаты</button>
+        <button data-tab="log">Лог</button>
+        <button data-tab="style">Стиль</button>
+      </div>
+      <div class="tab" data-tab="game">
+        <div class="row-btns">
+          <button class="btn small" id="admPauseBtn">⏸ Пауза</button>
+          <button class="btn small" id="admUndoBtn">↩️ Отменить ход</button>
+        </div>
+        <div class="row-btns">
+          <button class="btn small" id="admRulesBtn">⚙️ Правила</button>
+          <button class="btn small danger" id="admEndBtn">⛔ Завершить</button>
+        </div>
+        <div class="field-label">Следующий бросок (любого игрока)</div>
+        <div class="force-row">
+          <input class="input" id="admForce" placeholder="например 1 1 1 1 1" inputmode="numeric">
+          <button class="btn small gold" id="admForceBtn">Задать</button>
+        </div>
+        <div class="chips" id="admForcePresets"></div>
+        <div class="field-label">Игроки</div>
+        <div id="admPlayers"></div>
+      </div>
+      <div class="tab hidden" data-tab="rooms">
+        <button class="btn small ghost" id="admRoomsRefresh">Обновить</button>
+        <div id="admRooms"></div>
+      </div>
+      <div class="tab hidden" data-tab="log">
+        <button class="btn small ghost" id="admLogRefresh">Обновить</button>
+        <ul class="audit" id="admLog"></ul>
+      </div>
+      <div class="tab hidden" data-tab="style">
+        <label class="toggle"><input type="checkbox" id="admGold"> Золотые кубики на моих бросках</label>
+        <label class="toggle"><input type="checkbox" id="admBadge"> Бейдж 👑 у имени</label>
+        <div class="field-label">Объявление на стол</div>
+        <div class="force-row">
+          <input class="input" id="admAnnounce" maxlength="140" placeholder="Текст для всех">
+          <button class="btn small gold" id="admAnnounceBtn">📢</button>
+        </div>
+      </div>
+      <button class="btn ghost" id="adminCloseBtn">Закрыть</button>
+    </div>
+  </div>
+
   <div id="errorToast" class="error-toast hidden"></div>
 
-  <script type="module" src="/static/app.js?v=1"></script>
+  <script type="module" src="/static/app.js?v=2"></script>
 </body>
 </html>

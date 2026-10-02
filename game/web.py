@@ -9,7 +9,7 @@ from aiohttp import WSMsgType, web
 from . import config
 from .auth import display_name, validate_init_data
 from .engine import GameError
-from .rooms import RoomManager
+from .rooms import RoomManager, is_admin
 
 log = logging.getLogger(__name__)
 
@@ -64,11 +64,16 @@ def create_app(manager: RoomManager) -> web.Application:
                         mine = manager.rooms_of_user(uid)
                         target = mine[0] if mine and mine[0].active else None
                     if not target:
-                        await ws.send_json({"type": "no_room", "uid": uid})
+                        await ws.send_json({"type": "no_room", "uid": uid, "is_admin": is_admin(uid)})
                         continue
                     room = target
-                    await ws.send_json({"type": "hello_ok", "uid": uid, "name": name, "room": room.id})
-                    await room.attach(ws, uid, name)
+                    await ws.send_json({"type": "hello_ok", "uid": uid, "name": name, "room": room.id,
+                                        "is_admin": is_admin(uid)})
+                    await room.attach(ws, uid, name, spectate=bool(data.get("spectate")))
+                    continue
+                if kind == "admin" and data.get("op") == "rooms" and is_admin(uid):
+                    # список комнат доступен админу и без входа в комнату
+                    await ws.send_json({"type": "admin_rooms", "list": manager.rooms_overview()})
                     continue
                 if uid is None or room is None:
                     await ws.send_json({"type": "error", "message": "нет подключения к игре"})

@@ -1,0 +1,16 @@
+[Unit]
+Description=Игра «1000» — Telegram-бот и Mini App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=costi
+WorkingDirectory=/opt/1000-costi
+ExecStart=/opt/1000-costi/.venv/bin/python run.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
