@@ -166,41 +166,24 @@ function faceTexture(v, renderer, skin = 'ivory') {
   return tex;
 }
 
-function feltTexture() {
-  const s = 512;
-  const c = document.createElement('canvas');
-  c.width = c.height = s;
-  const g = c.getContext('2d');
-  g.fillStyle = '#1f6b44';
-  g.fillRect(0, 0, s, s);
-  const img = g.getImageData(0, 0, s, s);
-  const rnd = mulberry32(7);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const n = (rnd() - 0.5) * 18;
-    img.data[i] += n;
-    img.data[i + 1] += n;
-    img.data[i + 2] += n;
-  }
-  g.putImageData(img, 0, 0);
-  const v = g.createRadialGradient(s / 2, s / 2, s * 0.12, s / 2, s / 2, s * 0.5);
-  v.addColorStop(0, 'rgba(255,255,220,0.10)');
-  v.addColorStop(0.6, 'rgba(0,0,0,0)');
-  v.addColorStop(1, 'rgba(4,24,14,0.85)');
-  g.fillStyle = v;
-  g.fillRect(0, 0, s, s);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+const deg = THREE.MathUtils.degToRad;
+// планы камеры: elevation — угол над столом, r — радиус того, что должно влезть в кадр
+const SHOTS = { overview: { el: 47 }, throw: { el: 55, r: 3.9 }, result: { el: 64 } };
+const RESULT_HOLD = 3200; // мс на крупном плане после броска, затем общий план
+
+function readQuality() {
+  try { return localStorage.getItem('gfx') === 'low' ? 'low' : 'high'; } catch (e) { return 'high'; }
 }
 
 export class DiceTable {
   constructor(el, hooks = {}) {
     this.el = el;
     this.hooks = hooks;
+    this.quality = readQuality();
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(this.quality === 'low' ? 1 : Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = this.quality !== 'low';
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0x0b2416);
     el.appendChild(this.renderer.domElement);
@@ -208,32 +191,41 @@ export class DiceTable {
     this.renderer.domElement.addEventListener('webglcontextrestored', () => { this.dirty = true; });
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
-    this.target = new THREE.Vector3(0, 0, 0.15);
-    this.camDir = new THREE.Vector3(0, 0.86, 0.51).normalize();
+    this.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 220);
+    // живая камера: текущие параметры плавно догоняют выбранный план (cam → shot)
+    this.cam = { target: new THREE.Vector3(0, 0, -0.3), r: 6, el: 47, az: 0 };
+    this.shot = { kind: 'overview', target: new THREE.Vector3(0, 0, -0.3), r: 6, el: 47 };
     this.camShake = 0;
+    this._lastFrame = 0;
+    this._lastRender = 0;
+    this._fps = [];
 
     this.scene.add(new THREE.HemisphereLight(0xfff4dc, 0x0a2a18, 1.1));
     const sun = new THREE.DirectionalLight(0xffffff, 1.9);
     sun.position.set(2.5, 9, 4);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    Object.assign(sun.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 1, far: 25 });
+    sun.shadow.mapSize.set(2048, 2048);
+    Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 1, far: 30 });
     sun.shadow.radius = 4;
     this.scene.add(sun);
 
     this.hemi = this.scene.children[0];
     this.sun = sun;
-    this.feltTex = feltTexture();
+    // пол вокруг карты до горизонта (цвет задаёт карта), сверху — детальная плоскость стола 16×16
+    this.ground = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 1 }));
+    this.ground.rotation.x = -Math.PI / 2;
+    this.ground.position.y = -0.03;
+    this.ground.receiveShadow = true;
+    this.scene.add(this.ground);
     const table = new THREE.Mesh(
       new THREE.PlaneGeometry(16, 16),
-      new THREE.MeshStandardMaterial({ map: this.feltTex, roughness: 1, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 }),
     );
     table.rotation.x = -Math.PI / 2;
     table.receiveShadow = true;
     this.scene.add(table);
     this.table = table;
-    this.mapId = 'felt';
+    this.mapId = null;
     this.env = null;
 
     const textures = FACE_ORDER.map((v) => faceTexture(v, this.renderer));
@@ -257,6 +249,7 @@ export class DiceTable {
 
     this.anim = null;
     this.dirty = true;
+    this.setMap('felt');
     this._resize();
     new ResizeObserver(() => this._resize()).observe(el);
     this._loop = this._loop.bind(this);
@@ -266,7 +259,7 @@ export class DiceTable {
 
   /** Карта стола: 'felt' (сукно) или одна из MAP_BUILDERS. */
   setMap(id) {
-    if (id === this.mapId || (id !== 'felt' && !MAP_BUILDERS[id])) return;
+    if (id === this.mapId || !MAP_BUILDERS[id]) return;
     if (this.env) {
       this.scene.remove(this.env.group);
       this.env.group.traverse((o) => {
@@ -278,21 +271,129 @@ export class DiceTable {
       });
       if (this.env.floor) this.env.floor.dispose();
     }
-    const env = id === 'felt' ? null : MAP_BUILDERS[id](this.renderer);
-    const light = env?.light || { sky: 0xfff4dc, ground: 0x0a2a18, hemi: 1.1, sun: 0xffffff, sunI: 1.9 };
+    const env = MAP_BUILDERS[id](this.renderer, this.quality);
+    const light = env.light;
     this.hemi.color.setHex(light.sky);
     this.hemi.groundColor.setHex(light.ground);
     this.hemi.intensity = light.hemi;
     this.sun.color.setHex(light.sun);
     this.sun.intensity = light.sunI;
-    this.table.visible = !env || env.floor !== null;
-    this.table.material.map = env?.floor || this.feltTex;
+    // форма пола карты: прямоугольник w×d с центром (cx, cz) или правильный многоугольник радиуса r;
+    // текстура пола всегда рисуется как квадрат 16×16 вокруг центра — сдвигаем её под форму
+    const fs = env.floorShape || { w: 16, d: 16 };
+    let w, d, cx = fs.cx || 0, cz = fs.cz || 0;
+    this.table.geometry.dispose();
+    if (fs.sides) {
+      this.table.geometry = new THREE.CircleGeometry(fs.r, fs.sides, Math.PI / fs.sides);
+      w = d = 2 * fs.r;
+      cx = cz = 0;
+    } else {
+      this.table.geometry = new THREE.PlaneGeometry(fs.w, fs.d);
+      w = fs.w;
+      d = fs.d;
+    }
+    this.table.position.set(cx, 0, cz);
+    if (env.floor) {
+      env.floor.repeat.set(w / 16, d / 16);
+      env.floor.offset.set((8 + cx - w / 2) / 16, (8 - cz - d / 2) / 16);
+    }
+    this.table.visible = env.floor !== null;
+    this.table.material.map = env.floor;
     this.table.material.needsUpdate = true;
-    this.renderer.setClearColor(env ? env.clear : 0x0b2416);
-    if (env) this.scene.add(env.group);
+    const gm = this.ground.material;
+    if (gm.map && gm.map !== env.groundTex) gm.map.dispose();
+    gm.map = env.groundTex || null;
+    gm.color.setHex(env.groundTex ? 0xffffff : env.ground ?? 0x111111);
+    gm.needsUpdate = true;
+    this.ground.visible = env.ground !== null || !!env.groundTex;
+    this.ground.position.y = env.groundY ?? -0.03;
+    this.renderer.setClearColor(env.clear);
+    this.scene.fog = env.fog ? new THREE.Fog(env.fog[0], env.fog[1], env.fog[2]) : null;
+    this.scene.add(env.group);
+    this._applyHeavy(env.group);
     this.env = env;
     this.mapId = id;
+    if (this.shot.kind === 'overview') this.setShot('overview');
     this.dirty = true;
+  }
+
+  // ---------- камера ----------
+
+  /** Расстояние, при котором круг радиуса r вокруг цели целиком влезает в кадр. */
+  _fit(r) {
+    const v = deg(this.camera.fov / 2);
+    const h = Math.atan(Math.tan(v) * this.camera.aspect);
+    return r / Math.sin(Math.min(v, h));
+  }
+
+  /** План камеры: overview (вся карта), throw (средний, следим за броском), result (крупно на кубики). */
+  setShot(kind, target = null, r = null) {
+    clearTimeout(this._backTimer);
+    const sh = SHOTS[kind];
+    const view = this.env?.view || { r: 6, z: -0.3 };
+    this.shot = {
+      kind,
+      target: target ? target.clone() : new THREE.Vector3(0, 0, kind === 'overview' ? view.z : 0),
+      r: r ?? sh.r ?? view.r,
+      el: kind === 'overview' ? view.el ?? sh.el : sh.el,
+    };
+    if (kind === 'result') this._backTimer = setTimeout(() => this.setShot('overview'), RESULT_HOLD);
+    this.dirty = true;
+  }
+
+  _snapCamera() {
+    this.cam.target.copy(this.shot.target);
+    this.cam.r = this.shot.r;
+    this.cam.el = this.shot.el;
+    this.dirty = true;
+  }
+
+  /** Центр и радиус группы кубиков на столе. */
+  _cluster(points) {
+    const c = new THREE.Vector3();
+    points.forEach((p) => c.add(p));
+    c.divideScalar(points.length || 1);
+    c.y = 0;
+    let r = 0;
+    for (const p of points) r = Math.max(r, Math.hypot(p.x - c.x, p.z - c.z));
+    return [c, Math.max(1.9, r + 1.05)];
+  }
+
+  // ---------- качество графики ----------
+
+  _applyHeavy(root) {
+    const low = this.quality === 'low';
+    root.traverse((o) => {
+      if (o.userData.heavy) o.visible = !low;
+      if (low) o.castShadow = false;
+    });
+  }
+
+  /** Слабое устройство: без теней, частиц, толпы и облёта камеры. Решение запоминается. */
+  setQuality(q) {
+    if (q === this.quality) return;
+    this.quality = q;
+    try { localStorage.setItem('gfx', q); } catch (e) { /* без localStorage */ }
+    this.renderer.shadowMap.enabled = q !== 'low';
+    this.renderer.setPixelRatio(q === 'low' ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    this.scene.traverse((o) => {
+      for (const m of [].concat(o.material || [])) m.needsUpdate = true;
+    });
+    if (this.env) this._applyHeavy(this.env.group);
+    this._resize();
+  }
+
+  /** Замер кадров во время анимации броска: стабильно < 40 к/с — переходим на экономную графику. */
+  _measure(now) {
+    if (this.quality === 'low' || document.hidden) return;
+    const dt = now - this._lastFrame;
+    if (this._lastFrame && dt > 0 && dt < 250) this._fps.push(dt);
+    if (this._fps.length >= 150) {
+      const sorted = [...this._fps].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      this._fps = [];
+      if (median > 25) this.setQuality('low');
+    }
   }
 
   /** Куда кубик, летящий из start в end, врежется в стенку карты (или null). */
@@ -343,12 +444,6 @@ export class DiceTable {
     const h = this.el.clientHeight || 220;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    // подбираем расстояние так, чтобы зона броска влезала по ширине и высоте
-    const vHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    const hHalf = vHalf * this.camera.aspect;
-    const needW = AREA.x + 1.6; // запас на перспективу: ближние кубики шире
-    const needH = (AREA.z + 1.0) * 0.9;
-    this.camDist = Math.max(needW / hHalf, needH / vHalf, 6.5);
     this.camera.updateProjectionMatrix();
     this.dirty = true;
   }
@@ -436,7 +531,8 @@ export class DiceTable {
     });
     this._clearHighlight();
     if (roll) this._highlight(values.length, scoring, this._modeFor(roll));
-    this.dirty = true;
+    this.setShot('overview');
+    this._snapCamera();
   }
 
   /** Анимирует бросок; промис завершается, когда кубики легли. */
@@ -454,6 +550,8 @@ export class DiceTable {
       }
     });
     if (this.anim) this.anim.resolve();
+    const [c] = this._cluster(plan.map((p) => p.end));
+    this.setShot('throw', c);
     return new Promise((resolve) => {
       this.anim = { plan, t0: performance.now(), resolve, roll };
       this.hooks.onThrow?.(values.length);
@@ -506,24 +604,54 @@ export class DiceTable {
       const mode = this._modeFor(roll);
       this._highlight(roll.dice.length, roll.scoring || [], mode);
       if (mode === 'zero') this.camShake = 1;
+      const [c, r] = this._cluster(a.plan.map((p) => p.end));
+      this.setShot('result', c, r);
       a.resolve();
     }
   }
 
   _loop(now) {
     requestAnimationFrame(this._loop);
-    if (this.anim) this._step(now);
-    if (this.env?.update && this.env.update(now)) this.dirty = true;
+    const dt = Math.min(0.1, this._lastFrame ? (now - this._lastFrame) / 1000 : 0);
+    if (this.anim) {
+      this._step(now);
+      this._measure(now);
+    }
+    this._lastFrame = now;
+    let busy = !!this.anim;
+    if (this.env?.update && this.env.update(now)) busy = true;
+
+    // камера плавно догоняет план; на общем плане медленно «дышит» по кругу
+    const c = this.cam, sh = this.shot;
+    const k = 1 - Math.exp(-dt * (sh.kind === 'throw' ? 3.2 : 2.0));
+    c.target.lerp(sh.target, k);
+    c.r += (sh.r - c.r) * k;
+    c.el += (sh.el - c.el) * k;
+    const drift = sh.kind === 'overview' && this.quality !== 'low' ? Math.sin(now * 0.00011) * 0.2 : 0;
+    c.az += (drift - c.az) * k;
+    const moving = c.target.distanceTo(sh.target) > 0.002 || Math.abs(sh.r - c.r) > 0.002 || Math.abs(sh.el - c.el) > 0.02
+      || Math.abs(drift - c.az) > 0.0005 || drift !== 0;
+    if (moving) busy = true;
+
     let shakeX = 0;
     if (this.camShake > 0) {
-      this.dirty = true;
+      busy = true;
       this.camShake = Math.max(0, this.camShake - 0.045);
       shakeX = Math.sin(now / 22) * 0.12 * this.camShake;
     }
-    if (!this.anim && !this.dirty) return;
-    this.camera.position.copy(this.target).addScaledVector(this.camDir, this.camDist);
-    this.camera.position.x += shakeX;
-    this.camera.lookAt(this.target);
+    if (!busy && !this.dirty) return;
+    // без броска (облёт, фоновые анимации) хватает ~30 к/с — бережём батарею
+    if (!this.anim && !this.dirty && this.camShake === 0 && now - this._lastRender < 30) return;
+    this._lastRender = now;
+
+    const d = this._fit(c.r);
+    const el = deg(c.el);
+    this.camera.position.set(
+      c.target.x + Math.sin(c.az) * Math.cos(el) * d + shakeX,
+      c.target.y + Math.sin(el) * d,
+      c.target.z + Math.cos(c.az) * Math.cos(el) * d,
+    );
+    this.camera.lookAt(c.target);
     this.renderer.render(this.scene, this.camera);
     this.dirty = false;
   }
