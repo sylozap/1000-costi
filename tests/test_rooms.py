@@ -124,6 +124,24 @@ def test_admin_spectate_pause_force_undo(tmp_path):
     run(go())
 
 
+def test_admin_rig_visible_only_to_admin(tmp_path):
+    async def go():
+        m, room = setup(tmp_path)
+        w1, w2, wa = FakeWs(), FakeWs(), FakeWs()
+        await start_game(room, w1, w2)
+        await room.attach(wa, ADMIN, "Админ", spectate=True)
+        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "rig", "uid": 2, "mode": "exact",
+                                            "dice": [5, 5, 5, 0, 0]}, wa)
+        assert wa.last("state")["state"]["rigs"] == {"2": "5 5 5 ? ?"}
+        assert "rigs" not in w1.last("state")["state"]
+        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "unrig", "uid": 2}, wa)
+        assert wa.last("state")["state"]["rigs"] == {}
+        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "rig", "uid": 1, "mode": "good"}, wa)
+        await room.handle(1, "Вася", {"type": "roll"}, w1)
+        assert room.game.last_roll["points"] >= 100 and wa.last("state")["state"]["rigs"] == {}
+    run(go())
+
+
 def test_admin_rules_midgame(tmp_path):
     async def go():
         m, room = setup(tmp_path)

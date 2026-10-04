@@ -2,13 +2,36 @@
 from __future__ import annotations
 
 import copy
+import itertools
+import json
 import random
+from functools import lru_cache
 from dataclasses import dataclass, field
 
 from .rules import BARREL_MODES, TARGET, normalize, risk_table
 from .scoring import score_roll
 
-__all__ = ["Game", "GameError", "Player", "TARGET", "BARREL_MODES"]
+__all__ = ["Game", "GameError", "Player", "TARGET", "BARREL_MODES", "RIG_MODES"]
+
+# Подкрутка бросков конкретного игрока (админ):
+#   exact — точные значения (0 = случайно), low/good/bolt — «естественный» исход нужного вида,
+#   samosval/win/pit — цель хода: сервер сам подбирает броски, пока цель не достигнута или ход не кончится.
+RIG_MODES = ("exact", "bolt", "low", "good", "samosval", "win", "pit")
+RIG_ONE_SHOT = ("exact", "bolt", "low", "good")
+RIG_LABELS = {"bolt": "болт", "low": "мало", "good": "хороший бросок", "samosval": "до самосвала",
+              "win": "до победы", "pit": "из ямы"}
+
+
+@lru_cache(maxsize=32)
+def _combos(n: int, scoring_json: str) -> dict[int, list[tuple[int, ...]]]:
+    """Все броски n кубиков, сгруппированные по очкам (без пяти единиц — они выглядят подозрительно)."""
+    sc = json.loads(scoring_json)
+    out: dict[int, list[tuple[int, ...]]] = {}
+    for dice in itertools.product(range(1, 7), repeat=n):
+        if n == 5 and dice == (1, 1, 1, 1, 1):
+            continue
+        out.setdefault(score_roll(list(dice), sc)[0], []).append(dice)
+    return out
 
 
 class GameError(Exception):
@@ -58,7 +81,8 @@ class Game:
         self.roll_seq = 0
         self.turn_no = 0
         self.last_roll: dict | None = None
-        self.forced: list[int] | None = None  # значения следующего броска (админ)
+        self.forced: list[int] | None = None  # значения следующего броска любого игрока (админ)
+        self.rigs: dict[int, dict] = {}  # подкрутка бросков конкретных игроков (админ), см. RIG_MODES
         self.log: list[dict] = []
         self.history: list[dict] = []  # счёт всех игроков после каждого хода — для графика итогов
         self._ev_seq = 0
@@ -130,13 +154,106 @@ class Game:
     def _begin(self) -> None:
         self._new_events = []
 
-    def _roll_dice(self, n: int) -> tuple[list[int], bool]:
+    def _roll_dice(self, n: int, uid: int | None = None) -> tuple[list[int], bool]:
+        spec = self.rigs.get(uid) if uid is not None else None
+        if spec:
+            dice = self._rigged(spec, n)
+            if spec["mode"] in RIG_ONE_SHOT or dice is None:
+                self.rigs.pop(uid, None)
+            else:
+                spec["used"] = True
+            if dice is not None:
+                return dice, True
         if self.forced:
             dice = [v for v in self.forced[:n]]
             dice += [self.rng.randint(1, 6) for _ in range(n - len(dice))]
             self.forced = None
             return dice, True
         return [self.rng.randint(1, 6) for _ in range(n)], False
+
+    def _rigged(self, spec: dict, n: int) -> list[int] | None:
+        """Броски под подкрутку; None — цель недостижима, бросаем честно."""
+        mode = spec["mode"]
+        rnd = self.rng.randint
+        if mode == "exact":
+            vals = [d for d in spec["dice"] if 0 <= d <= 6][:n]
+            vals += [0] * (n - len(vals))
+            return [d if d else rnd(1, 6) for d in vals]
+        table = _combos(n, json.dumps(self.rules["scoring"], sort_keys=True))
+        nonzero = sorted(pts for pts in table if pts > 0)
+
+        def pick(points: list[int]) -> list[int]:
+            pts = points[rnd(1, len(points)) - 1] if len(points) > 1 else points[0]
+            options = table[pts]
+            return list(options[rnd(1, len(options)) - 1])
+
+        if mode == "bolt":
+            return pick([0]) if 0 in table else None
+        if mode == "low":
+            low = [x for x in nonzero if x <= 20]
+            return pick(low or nonzero[:1])
+        if mode == "good":
+            good = [x for x in nonzero if x >= 100]
+            return pick(good[:3] if good else nonzero[-1:])
+        p = self.cur
+        real = p.score + self.turn_points - p.debt
+        exact = False
+        if mode == "samosval":
+            if not self.rules["samosval_on"]:
+                return None
+            need, exact = self.rules["samosval"] - real, True
+        elif mode == "win":
+            need, exact = TARGET - real, self.barrel == "open"
+        else:  # pit
+            top = self.pit_top(self.turn_start_score)
+            if top is None:
+                return None
+            need = top - self.turn_start_score - self.turn_points
+        if need <= 0:
+            # цель уже набрана, но все кубики сыграли — подтверждающий бросок не должен сгореть
+            return pick(nonzero[:2]) if self.must_roll and mode == "pit" else None
+        if need in table:
+            return pick([need])
+        above = [x for x in nonzero if x > need]
+        if above and not exact:
+            return pick(above[:1])
+        below = [x for x in nonzero if x < need]
+        return pick(below[-1:]) if below else None
+
+    def rig(self, uid: int, spec: dict) -> str:
+        """Ставит подкрутку на броски игрока uid. Возвращает описание для админа."""
+        self.player(uid)
+        mode = spec.get("mode")
+        if mode not in RIG_MODES:
+            raise GameError("неизвестный режим подкрутки")
+        if mode == "exact":
+            try:
+                dice = [int(d) for d in spec.get("dice") or []]
+            except (TypeError, ValueError):
+                raise GameError("значения кубиков — числа от 1 до 6") from None
+            if not dice or len(dice) > 5 or any(not 0 <= d <= 6 for d in dice) or not any(dice):
+                raise GameError("нужно от 1 до 5 значений от 1 до 6 (0 — случайно)")
+            self.rigs[uid] = {"mode": mode, "dice": dice}
+            return " ".join(str(d) if d else "?" for d in dice)
+        if mode == "pit" and self.pit_top(self.player(uid).score) is None:
+            raise GameError("игрок не в яме")
+        if mode == "samosval" and not self.rules["samosval_on"]:
+            raise GameError("самосвал выключен в правилах")
+        self.rigs[uid] = {"mode": mode}
+        return RIG_LABELS[mode]
+
+    def unrig(self, uid: int) -> None:
+        self.rigs.pop(uid, None)
+
+    def rigs_view(self) -> dict[str, str]:
+        """Подкрутки для админ-интерфейса: uid → короткое описание."""
+        out = {}
+        for uid, spec in self.rigs.items():
+            if spec["mode"] == "exact":
+                out[str(uid)] = " ".join(str(d) if d else "?" for d in spec["dice"])
+            else:
+                out[str(uid)] = RIG_LABELS[spec["mode"]]
+        return out
 
     def _set_score(self, p: Player, value: int) -> None:
         """Устанавливает счёт с учётом нуля, самосвала и падения с бочки."""
@@ -254,7 +371,7 @@ class Game:
         p = self._check_turn(uid)
         r = self.rules
         n = self.dice_left
-        dice, forced = self._roll_dice(n)
+        dice, forced = self._roll_dice(n, uid)
         points, idx = score_roll(dice, r["scoring"])
         confirming = self.must_roll
         self.roll_seq += 1
@@ -534,6 +651,9 @@ class Game:
         if self.phase != "play":
             return
         self._record()
+        spec = self.rigs.get(self.cur.uid)
+        if spec and spec.get("used"):
+            del self.rigs[self.cur.uid]  # цель хода не достигнута — ход кончился, подкрутка снимается
         self.current = (self.current + 1) % len(self.players)
         self._reset_turn()
 
@@ -545,6 +665,7 @@ class Game:
         idx = self.players.index(p)
         was_current = self.phase == "play" and idx == self.current
         self.players.pop(idx)
+        self.rigs.pop(uid, None)
         self._ev("leave", f"🚪 {p.name} покинул(а) игру", uid)
         if not self.players:
             self.phase = "finished"
@@ -606,11 +727,12 @@ class Game:
 
     def restore_from(self, snap: Game) -> None:
         """Возвращает партию к снимку, сохраняя сквозные счётчики событий и бросков."""
-        ev_seq, roll_seq = self._ev_seq, self.roll_seq
+        ev_seq, roll_seq, rigs = self._ev_seq, self.roll_seq, self.rigs
         self.__dict__.update(snap.snapshot().__dict__)
         self._ev_seq, self.roll_seq = ev_seq, roll_seq
         self.last_roll = None
         self.forced = None
+        self.rigs = {uid: {k: v for k, v in spec.items() if k != "used"} for uid, spec in rigs.items()}
 
     # ---------- сериализация ----------
 

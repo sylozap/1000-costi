@@ -126,10 +126,16 @@ class Room:
 
     async def broadcast(self) -> None:
         self.updated = time.time()
-        payload = json.dumps({"type": "state", "state": self.state()}, ensure_ascii=False)
-        for ws in list(self.clients):
+        state = self.state()
+        payload = json.dumps({"type": "state", "state": state}, ensure_ascii=False)
+        admin_payload = None
+        if self.game and any(is_admin(u) for u in self.clients.values()):
+            # подкрутки видит только админ
+            admin_payload = json.dumps({"type": "state", "state": dict(state, rigs=self.game.rigs_view())},
+                                       ensure_ascii=False)
+        for ws, uid in list(self.clients.items()):
             try:
-                await ws.send_str(payload)
+                await ws.send_str(admin_payload if admin_payload and is_admin(uid) else payload)
             except Exception:  # noqa: BLE001 — клиент отвалился
                 self.clients.pop(ws, None)
 
@@ -507,6 +513,16 @@ class Room:
                 raise GameError("значения кубиков — числа от 1 до 6") from None
             g.force_next(dice)
             await self.send_to(ws, {"type": "admin_ok", "text": f"Следующий бросок: {' '.join(map(str, dice))}"})
+            return
+        elif op == "rig":
+            target = int(msg.get("uid", 0))
+            what = g.rig(target, {"mode": msg.get("mode"), "dice": msg.get("dice")})
+            await self.send_to(ws, {"type": "admin_ok", "text": f"🎯 {g.player(target).name}: {what}"})
+            await self.broadcast()
+            return
+        elif op == "unrig":
+            g.unrig(int(msg.get("uid", 0)))
+            await self.broadcast()
             return
         else:
             raise GameError("неизвестная команда")
