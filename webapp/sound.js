@@ -98,7 +98,57 @@ const SFX = {
   },
   turn() { const t = ctx.currentTime; tone(988, t, 0.12, { gain: 0.1 }); tone(1319, t + 0.1, 0.2, { gain: 0.1 }); },
   pop() { const t = ctx.currentTime; tone(600, t, 0.08, { gain: 0.08, slide: 400 }); },
+  // ---- арены ----
+  gong() {
+    const t = ctx.currentTime;
+    [[98, 0.22], [147, 0.12], [233, 0.08], [311, 0.05], [467, 0.03]].forEach(([f, g]) => tone(f, t, 2.6, { gain: g }));
+    noise(t, 0.25, { type: 'bandpass', freq: 900, q: 1, gain: 0.25 });
+  },
+  bell() {
+    const t = ctx.currentTime;
+    [0, 0.32].forEach((d) => [[1250, 0.12], [2510, 0.05], [3780, 0.03]].forEach(([f, g]) => tone(f, t + d, 0.9, { gain: g })));
+  },
+  crowd() {
+    const t = ctx.currentTime;
+    noise(t, 1.8, { type: 'bandpass', freq: 700, q: 0.6, gain: 0.5, attack: 0.35 });
+    noise(t + 0.1, 1.6, { type: 'bandpass', freq: 1500, q: 0.8, gain: 0.25, attack: 0.3 });
+  },
+  boo() {
+    const t = ctx.currentTime;
+    [140, 151, 163].forEach((f) => tone(f, t, 1.2, { type: 'sawtooth', gain: 0.035, slide: -30 }));
+    noise(t, 1.1, { type: 'lowpass', freq: 500, q: 0.7, gain: 0.25, attack: 0.25 });
+  },
+  rattle() {
+    const t = ctx.currentTime;
+    for (let i = 0; i < 4; i++) noise(t + i * 0.03, 0.12, { type: 'bandpass', freq: 3500 + Math.random() * 2500, q: 6, gain: 0.35 });
+  },
+  rope() { const t = ctx.currentTime; tone(85, t, 0.25, { type: 'triangle', gain: 0.25, slide: -30 }); },
+  clink() { const t = ctx.currentTime; tone(2637, t, 0.5, { gain: 0.07 }); tone(3520, t + 0.06, 0.45, { gain: 0.05 }); },
+  chips() {
+    const t = ctx.currentTime;
+    for (let i = 0; i < 6; i++) noise(t + i * 0.045, 0.05, { type: 'bandpass', freq: 2600 + Math.random() * 900, q: 4, gain: 0.3 });
+  },
 };
+
+/** Шум с фильтром: толпа, лязг, шорох. */
+function noise(start, dur, { type = 'bandpass', freq = 1000, q = 1, gain = 0.3, attack = 0.005 } = {}) {
+  const src = ctx.createBufferSource();
+  const len = Math.floor(ctx.sampleRate * dur);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  src.buffer = buf;
+  const f = ctx.createBiquadFilter();
+  f.type = type;
+  f.frequency.value = freq;
+  f.Q.value = q;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, start);
+  g.gain.exponentialRampToValueAtTime(gain, start + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+  src.connect(f).connect(g).connect(ctx.destination);
+  src.start(start);
+}
 
 export function play(name) {
   if (ready() && SFX[name]) SFX[name]();

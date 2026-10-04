@@ -1,4 +1,5 @@
-import { DiceTable } from './dice3d.js';
+import { DiceTable, faceCanvas } from './dice3d.js';
+import { MAP_ICONS } from './maps.js';
 import * as snd from './sound.js';
 
 const tg = window.Telegram?.WebApp;
@@ -36,6 +37,14 @@ let prevCurrent = null;
 const prevScores = new Map();
 let myPresets = [];
 let finishAch = [];
+let finishBank = null;
+let pmUid = null; // игрок, открытый в админском окне
+let pmDice = [0, 0, 0, 0, 0];
+// категориальная палитра графика итогов (dataviz: порядок фиксирован, отдельно для тёмной и светлой темы)
+const SERIES = {
+  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
+  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'],
+};
 
 // ---------- Telegram ----------
 if (tg) {
@@ -44,8 +53,18 @@ if (tg) {
   tg.disableVerticalSwipes?.();
 }
 
+/** Звуковая тема арены по текущей карте. */
+function arena() {
+  return { octagon: 'fight', ring: 'box', bar: 'bar', casino: 'casino' }[state?.settings?.map] || null;
+}
+
 const table = new DiceTable($('table3d'), {
   onThrow: () => snd.shake(),
+  onWall: (i) => {
+    if (i > 1) return;
+    const a = arena();
+    snd.play(a === 'fight' ? 'rattle' : a === 'box' ? 'rope' : 'chips');
+  },
   onImpact: (strength, i) => {
     if (strength > 0.3 || i % 2 === 0) snd.knock(strength);
     if (strength === 1 && i === 0) snd.haptic.impact('light');
@@ -157,6 +176,14 @@ function onMessage(m) {
     case 'admin_ok':
       showInfo(m.text);
       break;
+    case 'profile':
+      renderSkins(m);
+      break;
+    case 'bank':
+      finishBank = m;
+      snd.play('chips');
+      toast('💰', `${m.uid === me ? 'Ты забираешь' : m.name + ' забирает'} банк: ${m.amount} 🪙`, 2400);
+      break;
     case 'left':
       showError('Ты вышел из игры');
       break;
@@ -168,7 +195,7 @@ function onMessage(m) {
 
 // ---------- очередь состояний и анимации ----------
 function skinFor(s, roll) {
-  return s.cosmetics?.gold?.includes(roll.uid) ? 'gold' : 'ivory';
+  return s.cosmetics?.skins?.[roll.uid] || (s.cosmetics?.gold?.includes(roll.uid) ? 'gold' : 'ivory');
 }
 
 async function pump() {
@@ -267,9 +294,11 @@ async function processEvents(s) {
     if (seen.has(e.id)) continue;
     seen.add(e.id);
     const mine = e.uid === me;
+    const fight = arena() === 'fight' || arena() === 'box';
     switch (e.kind) {
       case 'roll':
         snd.play(g.last_roll?.points ? 'score' : 'zero');
+        if (fight && g.last_roll?.points >= 100) snd.play('crowd');
         if (mine && !g.last_roll?.points) snd.haptic.notify('error');
         break;
       case 'hot':
@@ -283,6 +312,8 @@ async function processEvents(s) {
       case 'commit':
       case 'debt':
         snd.play('commit');
+        if (e.kind === 'commit' && arena() === 'bar') snd.play('clink');
+        if (e.kind === 'commit' && arena() === 'casino') snd.play('chips');
         if (mine) snd.haptic.notify('success');
         break;
       case 'limit':
@@ -290,6 +321,7 @@ async function processEvents(s) {
         break;
       case 'bolt':
         snd.play('bolt');
+        if (fight) snd.play('boo');
         flashChip(e.uid);
         if (mine) snd.haptic.notify('warning');
         break;
@@ -302,6 +334,10 @@ async function processEvents(s) {
         break;
       case 'samosval':
         snd.play('samosval');
+        if (fight) {
+          caption('KO!', 'ko');
+          snd.play('crowd');
+        }
         fxTruck();
         flashChip(e.uid);
         toast('🚛', `Самосвал! ${nameOf(s, e.uid)} → 0`, 2200);
@@ -328,6 +364,7 @@ async function processEvents(s) {
         break;
       case 'barrel_sit':
         snd.play('barrel');
+        if (fight) caption('ROUND 2');
         fxBarrel();
         toast('🛢', `${nameOf(s, e.uid)} на бочке!`);
         break;
@@ -367,12 +404,21 @@ async function processEvents(s) {
         break;
       case 'order_done':
         toast('🎲', 'Очерёдность определена!');
+        if (fight) {
+          caption('FIGHT!');
+          snd.play(arena() === 'fight' ? 'gong' : 'bell');
+        }
         break;
       case 'timeout':
         showError(e.text);
         break;
       case 'win':
         snd.play('win');
+        if (fight) {
+          const others = g.players.filter((p) => p.uid !== e.uid);
+          caption(others.length && others.every((p) => p.score < 300) ? 'FLAWLESS VICTORY' : 'WINNER!', 'win');
+          snd.play('crowd');
+        }
         snd.haptic.notify('success');
         break;
     }
@@ -387,6 +433,17 @@ function fxAdd(cls, html, ms) {
   $('fxLayer').appendChild(el);
   setTimeout(() => el.remove(), ms);
   return el;
+}
+
+/** Крупная надпись в стиле файтинга поверх стола. */
+function caption(text, cls = '') {
+  const el = $('fightCaption');
+  el.textContent = text;
+  el.className = 'fight-caption ' + cls;
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(caption.t);
+  caption.t = setTimeout(() => el.classList.add('hidden'), 1800);
 }
 
 function fxTruck() {
@@ -488,7 +545,7 @@ function avatar(uid, name) {
   const el = document.createElement('div');
   el.className = 'avatar';
   el.style.background = `hsl(${(uid * 47) % 360} 65% 62%)`;
-  el.textContent = (name || '?').trim().charAt(0).toUpperCase();
+  el.textContent = ([...(name || '?').trim()][0] || '?').toUpperCase();
   return el;
 }
 
@@ -512,7 +569,9 @@ const isBarrelMode = (r) => r.barrel === 'points' || r.barrel === 'knock';
 function render(s) {
   state = s;
   const spect = s.spectators ? ` · 👀 ${s.spectators}` : '';
-  $('modeChip').textContent = `${s.preset} · ${s.rules_title}` + (s.settings.timer ? ` · ⏱${s.settings.timer}с` : '') + spect;
+  const bank = s.bank ? ` · 🏦 ${s.bank}` : '';
+  $('modeChip').textContent = `${s.preset} · ${s.rules_title}` + (s.settings.timer ? ` · ⏱${s.settings.timer}с` : '') + bank + spect;
+  table.setMap(s.settings.map || 'felt');
   if (s.status === 'cancelled') {
     showMessage('Игра отменена', 'Создай новую командой /newgame в группе.');
     return;
@@ -520,6 +579,7 @@ function render(s) {
   if (s.status === 'lobby') {
     $('finishModal').classList.add('hidden');
     finishAch = [];
+    finishBank = null;
     renderLobby(s);
     showScreen('screenLobby');
     return;
@@ -527,6 +587,7 @@ function render(s) {
   renderGame(s);
   showScreen('screenGame');
   if (!$('adminModal').classList.contains('hidden')) renderAdminGame(s);
+  if (!$('playerModal').classList.contains('hidden')) renderPlayerSheet(s);
 }
 
 function canEditRules(s) {
@@ -547,7 +608,14 @@ function renderLobby(s) {
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = crowned(s, p.uid, p.name) + (p.uid === me ? ' (ты)' : '');
-    li.append(avatar(p.uid, p.name), name, dot);
+    const bot = p.uid < 0;
+    li.append(avatar(p.uid, p.name), name);
+    if (!bot) {
+      const chips = document.createElement('span');
+      chips.className = 'chips-count';
+      chips.textContent = `🪙 ${s.chips?.[p.uid] ?? ''}`;
+      li.append(chips, dot);
+    }
     if (p.uid === s.owner) {
       const tag = document.createElement('span');
       tag.className = 'tag';
@@ -563,6 +631,34 @@ function renderLobby(s) {
     ul.appendChild(li);
   }
   $('joinBtn').classList.toggle('hidden', isMember || s.members.length >= s.max_players);
+  const bots = $('botBtns');
+  bots.classList.toggle('hidden', !isOwner || s.members.length >= s.max_players);
+  if (isOwner && !bots.childElementCount) {
+    for (const [style, title] of Object.entries(s.bot_styles || {})) {
+      const b = document.createElement('button');
+      b.className = 'btn tiny ghost';
+      b.textContent = '+ ' + title;
+      b.onclick = () => send({ type: 'add_bot', style });
+      bots.appendChild(b);
+    }
+  }
+
+  const maps = $('mapList');
+  maps.innerHTML = '';
+  for (const [id, title] of Object.entries(s.maps || {})) {
+    const b = document.createElement('button');
+    b.className = 'chip' + (id === s.settings.map ? ' on' : '');
+    b.textContent = `${MAP_ICONS[id] || ''} ${title}`;
+    b.disabled = !editable;
+    b.onclick = () => send({ type: 'settings', map: id });
+    maps.appendChild(b);
+  }
+  const hasBots = Object.keys(s.bots || {}).length > 0;
+  $('segStake').classList.toggle('locked', !editable || hasBots);
+  $('segStake').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === String(s.settings.stake)));
+  $('stakeNote').textContent = hasBots ? 'С ботами играем без ставок.'
+    : s.settings.stake ? `Каждый вносит ${s.settings.stake} 🪙, победитель забирает банк. При отмене взносы возвращаются.`
+      : 'Фишки: у каждого 1000 🪙 на старте, раз в сутки +100, если осталось меньше 200.';
 
   // пресеты
   $('presetName').textContent = s.preset;
@@ -622,8 +718,10 @@ function renderGame(s) {
   box.innerHTML = '';
   for (const p of g.players) {
     const chip = document.createElement('div');
-    chip.className = 'pchip' + (p.uid === g.current_uid ? ' current' : '') + (p.uid === me ? ' me' : '');
+    chip.className = 'pchip' + (p.uid === g.current_uid ? ' current' : '') + (p.uid === me ? ' me' : '')
+      + (isAdmin ? ' tappable' : '');
     chip.dataset.uid = p.uid;
+    if (isAdmin) chip.onclick = () => openPlayerSheet(p.uid);
     const row = document.createElement('div');
     row.className = 'prow';
     const dot = document.createElement('span');
@@ -645,6 +743,7 @@ function renderGame(s) {
       b.textContent = text;
       badges.appendChild(b);
     };
+    if (isAdmin && s.rigs?.[p.uid]) add(`🎯 ${s.rigs[p.uid]}`, 'rig');
     if (g.phase === 'order') {
       add(p.order_rolls.length ? `🎲 ${p.order_rolls.join(' → ')}` : '🎲 ждём', p.order_pending ? 'warn' : '');
     } else {
@@ -739,7 +838,12 @@ function renderGame(s) {
 
   // смена хода
   if (g.current_uid !== prevCurrent) {
+    const was = prevCurrent;
     prevCurrent = g.current_uid;
+    if (was !== null && g.phase === 'play') {
+      if (arena() === 'fight') snd.play('gong');
+      if (arena() === 'box') snd.play('bell');
+    }
     if (g.current_uid === me && g.phase === 'play') {
       snd.play('turn');
       snd.haptic.notify('success');
@@ -863,6 +967,10 @@ function showFinish(s) {
     li.appendChild(sc);
     ol.appendChild(li);
   }
+  const bankEl = $('finishBank');
+  bankEl.classList.toggle('hidden', !finishBank);
+  if (finishBank) bankEl.textContent = `💰 ${finishBank.name} забирает банк: ${finishBank.amount} 🪙`;
+  renderSummary(g);
   const ach = $('finishAch');
   ach.innerHTML = '';
   for (const a of finishAch) {
@@ -1180,20 +1288,163 @@ function renderAdminGame(s) {
     return;
   }
   for (const p of g.players) {
-    const row = document.createElement('div');
+    const row = document.createElement('button');
     row.className = 'adm-player';
-    row.innerHTML = `<b></b><input type="number" step="5"><button title="Задать счёт">✓</button>
-      <button title="Выдать болт">🔩</button><button title="Самосвал">🚛</button><button title="Исключить">✕</button>`;
+    row.innerHTML = '<b></b><span></span><span class="rig"></span>';
     row.querySelector('b').textContent = p.name;
-    const inp = row.querySelector('input');
-    inp.value = p.score;
-    const [setB, boltB, truckB, kickB] = row.querySelectorAll('button');
-    setB.onclick = () => send({ type: 'admin', op: 'set_score', uid: p.uid, score: Number(inp.value) || 0 });
-    boltB.onclick = () => send({ type: 'admin', op: 'bolt', uid: p.uid });
-    truckB.onclick = () => send({ type: 'admin', op: 'samosval', uid: p.uid });
-    kickB.onclick = () => confirmThen(`Исключить ${p.name}?`, () => send({ type: 'admin', op: 'kick', uid: p.uid }));
+    row.querySelector('span').textContent = p.score;
+    row.querySelector('.rig').textContent = s.rigs?.[p.uid] ? `🎯 ${s.rigs[p.uid]}` : '⚙️';
+    row.onclick = () => openPlayerSheet(p.uid);
     box.appendChild(row);
   }
+}
+
+// ---------- админ: окно игрока (подкрутка и действия) ----------
+function openPlayerSheet(uid) {
+  const p = state?.game?.players.find((x) => x.uid === uid);
+  if (!p) return;
+  pmUid = uid;
+  pmDice = [0, 0, 0, 0, 0];
+  $('pmScore').value = p.score;
+  $('pmChips').value = state.chips?.[uid] ?? '';
+  $('playerModal').classList.remove('hidden');
+  renderPlayerSheet(state);
+}
+
+function renderPlayerSheet(s) {
+  const p = s.game?.players.find((x) => x.uid === pmUid);
+  if (!p) {
+    $('playerModal').classList.add('hidden');
+    return;
+  }
+  $('pmName').textContent = `${p.name} · ${p.score}`;
+  const rig = s.rigs?.[pmUid];
+  $('pmRig').textContent = rig ? `🎯 Подкручено: ${rig}` : 'Подкрутки нет — бросает честно';
+  $('pmRig').classList.toggle('on', !!rig);
+  $('pmUnrigBtn').classList.toggle('hidden', !rig);
+  $('pmPitBtn').disabled = !p.in_pit;
+  $('pmHuman').classList.toggle('hidden', pmUid < 0);
+  const box = $('pmDice');
+  box.innerHTML = '';
+  pmDice.forEach((v, i) => {
+    const b = document.createElement('button');
+    b.className = 'pm-die' + (v ? '' : ' any');
+    if (v) b.appendChild(miniDie(v));
+    else b.textContent = '?';
+    b.onclick = () => {
+      pmDice[i] = (pmDice[i] + 1) % 7;
+      snd.haptic.select();
+      renderPlayerSheet(state);
+    };
+    box.appendChild(b);
+  });
+}
+
+function rig(body) {
+  send({ type: 'admin', op: 'rig', uid: pmUid, ...body });
+}
+
+// ---------- мои кубики ----------
+const swatches = {};
+function swatch(id) {
+  if (!swatches[id]) swatches[id] = faceCanvas(5, id).toDataURL();
+  return swatches[id];
+}
+
+function renderSkins(m) {
+  $('chipsBalance').textContent = `Фишки: ${m.chips} 🪙`;
+  const grid = $('skinGrid');
+  grid.innerHTML = '';
+  for (const sk of m.skins) {
+    const b = document.createElement('button');
+    b.className = 'skin' + (sk.id === m.skin ? ' on' : '');
+    b.innerHTML = '<img alt=""><span></span>';
+    b.querySelector('img').src = swatch(sk.id);
+    b.querySelector('span').textContent = (sk.personal ? '✨ ' : '') + sk.name;
+    b.onclick = () => {
+      snd.haptic.select();
+      send({ type: 'skin', id: sk.id });
+    };
+    grid.appendChild(b);
+  }
+}
+
+// ---------- итоги партии: график счёта ----------
+function renderSummary(g) {
+  const box = $('summaryChart');
+  const hl = $('finishHighlights');
+  box.innerHTML = '';
+  hl.innerHTML = '';
+  const sum = g.summary;
+  if (!sum) return;
+  for (const h of sum.highlights) {
+    const li = document.createElement('li');
+    li.textContent = h;
+    hl.appendChild(li);
+  }
+  const hist = sum.history;
+  if (hist.length < 2) return;
+  const theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  // цвет закреплён за игроком (порядок ходов), а не за местом в итоговой таблице
+  const players = g.players.map((p, i) => ({ ...p, color: SERIES[theme][i % 8] }));
+  const W = 320, H = 170, L = 34, R = 10, T = 10, B = 22;
+  const maxY = Math.max(1000, ...hist.flatMap((h) => Object.values(h.scores)));
+  const x = (i) => L + ((W - L - R) * i) / (hist.length - 1);
+  const y = (v) => T + (H - T - B) * (1 - v / maxY);
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    parent.appendChild(e);
+    return e;
+  };
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img',
+    'aria-label': 'Счёт игроков по ходам' }, box);
+  for (const v of [0, 500, 1000]) {
+    el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' }, svg);
+    el('text', { x: L - 6, y: y(v) + 3, class: 'axis', 'text-anchor': 'end' }, svg).textContent = v;
+  }
+  el('text', { x: W - R, y: H - 6, class: 'axis', 'text-anchor': 'end' }, svg).textContent = `ходов: ${hist.length - 1}`;
+  for (const p of players) {
+    const pts = hist.map((h, i) => `${x(i).toFixed(1)},${y(h.scores[p.uid] ?? 0).toFixed(1)}`).join(' ');
+    el('polyline', { points: pts, fill: 'none', stroke: p.color, 'stroke-width': p.uid === g.winner_uid ? 2.5 : 2,
+      'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
+  }
+  // наведение: вертикальная линия и подсказка со счётом всех
+  const cross = el('line', { y1: T, y2: H - B, class: 'cross', visibility: 'hidden' }, svg);
+  const tip = document.createElement('div');
+  tip.className = 'chart-tip hidden';
+  box.appendChild(tip);
+  const hit = el('rect', { x: L, y: 0, width: W - L - R, height: H, fill: 'transparent' }, svg);
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(hist.length - 1, Math.round(((px - L) / (W - L - R)) * (hist.length - 1))));
+    cross.setAttribute('x1', x(i));
+    cross.setAttribute('x2', x(i));
+    cross.setAttribute('visibility', 'visible');
+    const rows = [...players].sort((a, b) => (hist[i].scores[b.uid] ?? 0) - (hist[i].scores[a.uid] ?? 0));
+    tip.innerHTML = `<b>Ход ${i}</b>` + rows.map((p) => `<div><i style="background:${p.color}"></i><span></span><em>${hist[i].scores[p.uid] ?? 0}</em></div>`).join('');
+    tip.querySelectorAll('span').forEach((sp, k) => { sp.textContent = rows[k].name; });
+    tip.classList.remove('hidden');
+    tip.style.left = `${Math.min(70, Math.max(0, (x(i) / W) * 100 - 15))}%`;
+  };
+  hit.addEventListener('pointermove', move);
+  hit.addEventListener('pointerdown', move);
+  hit.addEventListener('pointerleave', () => {
+    cross.setAttribute('visibility', 'hidden');
+    tip.classList.add('hidden');
+  });
+  const legend = document.createElement('div');
+  legend.className = 'legend';
+  for (const p of players) {
+    const it = document.createElement('span');
+    it.innerHTML = '<i></i>';
+    it.querySelector('i').style.background = p.color;
+    it.appendChild(document.createTextNode(p.name));
+    legend.appendChild(it);
+  }
+  box.appendChild(legend);
 }
 
 function renderAudit(list) {
@@ -1290,10 +1541,10 @@ onTap('shareCopyBtn', () => {
 onTap('shareCloseBtn', () => $('shareModal').classList.add('hidden'));
 onTap('achBtn', () => send({ type: 'my_achievements' }));
 onTap('achCloseBtn', () => $('achModal').classList.add('hidden'));
-for (const [seg, key] of [['segBarrel', 'barrel'], ['segTimer', 'timer']]) {
+for (const [seg, key] of [['segBarrel', 'barrel'], ['segTimer', 'timer'], ['segStake', 'stake']]) {
   $(seg).querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
     snd.haptic.select();
-    send({ type: 'settings', [key]: key === 'timer' ? Number(b.dataset.v) : b.dataset.v });
+    send({ type: 'settings', [key]: key === 'barrel' ? b.dataset.v : Number(b.dataset.v) });
   }));
 }
 
@@ -1320,6 +1571,43 @@ for (const [title, dice] of FORCE_PRESETS) {
   b.onclick = () => { $('admForce').value = dice; };
   $('admForcePresets').appendChild(b);
 }
+onTap('pmCloseBtn', () => $('playerModal').classList.add('hidden'));
+onTap('pmExactBtn', () => {
+  if (!pmDice.some(Boolean)) return showError('Задай хотя бы один кубик');
+  rig({ mode: 'exact', dice: pmDice });
+});
+onTap('pmUnrigBtn', () => send({ type: 'admin', op: 'unrig', uid: pmUid }));
+document.querySelectorAll('#playerModal [data-rig]').forEach((b) => b.addEventListener('click', () => {
+  snd.haptic.impact('light');
+  rig({ mode: b.dataset.rig });
+}));
+for (const [title, dice] of FORCE_PRESETS) {
+  const b = document.createElement('button');
+  b.className = 'chip';
+  b.textContent = title;
+  b.onclick = () => {
+    pmDice = dice.split(' ').map(Number);
+    renderPlayerSheet(state);
+  };
+  $('pmPresets').appendChild(b);
+}
+onTap('pmScoreBtn', () => send({ type: 'admin', op: 'set_score', uid: pmUid, score: Number($('pmScore').value) || 0 }));
+onTap('pmBoltBtn', () => send({ type: 'admin', op: 'bolt', uid: pmUid }));
+onTap('pmTruckBtn', () => send({ type: 'admin', op: 'samosval', uid: pmUid }));
+onTap('pmKickBtn', () => confirmThen('Исключить игрока?', () => {
+  send({ type: 'admin', op: 'kick', uid: pmUid });
+  $('playerModal').classList.add('hidden');
+}));
+onTap('pmChipsBtn', () => send({ type: 'admin', op: 'chips', uid: pmUid, value: Number($('pmChips').value) || 0 }));
+document.querySelectorAll('#playerModal [data-grant], #playerModal [data-revoke]').forEach((b) => b.addEventListener('click', () => {
+  const skin = b.dataset.grant || b.dataset.revoke;
+  send({ type: 'admin', op: 'grant_skin', uid: pmUid, skin, on: !!b.dataset.grant });
+}));
+onTap('skinBtn', () => {
+  $('skinModal').classList.remove('hidden');
+  send({ type: 'my_profile' });
+});
+onTap('skinCloseBtn', () => $('skinModal').classList.add('hidden'));
 onTap('admRoomsRefresh', () => send({ type: 'admin', op: 'rooms' }));
 onTap('admLogRefresh', () => send({ type: 'admin', op: 'audit' }));
 $('admGold').addEventListener('change', (e) => send({ type: 'admin', op: 'cosmetics', gold: e.target.checked }));

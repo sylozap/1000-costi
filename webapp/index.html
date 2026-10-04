@@ -6,7 +6,7 @@
   <title>1000 — кости</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/theme.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=2">
+  <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
   <div id="app">
@@ -14,6 +14,7 @@
       <div class="brand"><span class="logo">⚄</span> 1000</div>
       <div class="mode" id="modeChip"></div>
       <button class="icon-btn hidden" id="adminBtn" aria-label="Админ-панель">🛠</button>
+      <button class="icon-btn" id="skinBtn" aria-label="Мои кубики">🎨</button>
       <button class="icon-btn" id="achBtn" aria-label="Ачивки">🏅</button>
       <button class="icon-btn" id="rulesBtn" aria-label="Правила">?</button>
       <button class="icon-btn" id="themeBtn" aria-label="Тема">☀️</button>
@@ -38,6 +39,7 @@
         <h2>Игроки <span class="muted" id="lobbyCount"></span></h2>
         <ul class="lobby-players" id="lobbyPlayers"></ul>
         <button class="btn ghost hidden" id="joinBtn">Присоединиться</button>
+        <div class="bot-btns hidden" id="botBtns"></div>
       </div>
       <div class="card">
         <h2>Правила <span class="preset-name" id="presetName"></span></h2>
@@ -61,6 +63,16 @@
           <button data-v="60">60 с</button>
           <button data-v="120">120 с</button>
         </div>
+        <div class="field-label">Карта</div>
+        <div class="chips" id="mapList"></div>
+        <div class="field-label">Взнос в банк</div>
+        <div class="segmented" id="segStake">
+          <button data-v="0">Без ставок</button>
+          <button data-v="50">50 🪙</button>
+          <button data-v="100">100 🪙</button>
+          <button data-v="250">250 🪙</button>
+        </div>
+        <p class="setting-desc muted" id="stakeNote"></p>
         <p class="setting-desc muted" id="ownerNote"></p>
       </div>
       <div class="lobby-actions">
@@ -80,6 +92,7 @@
         <div class="roll-badge hidden" id="rollBadge"></div>
         <div class="reactions-layer" id="reactionsLayer"></div>
         <div class="pause-overlay hidden" id="pauseOverlay"><div>⏸</div>Пауза</div>
+        <div class="fight-caption hidden" id="fightCaption"></div>
       </div>
 
       <div class="turn-panel">
@@ -125,6 +138,9 @@
       <div class="trophy">🏆</div>
       <h2 id="finishTitle"></h2>
       <ol class="ranking" id="ranking"></ol>
+      <div class="finish-bank hidden" id="finishBank"></div>
+      <div class="summary-chart" id="summaryChart"></div>
+      <ul class="highlights" id="finishHighlights"></ul>
       <div class="finish-ach" id="finishAch"></div>
       <button class="btn primary" id="rematchBtn">Реванш</button>
       <button class="btn ghost" id="closeFinishBtn">Посмотреть стол</button>
@@ -229,8 +245,72 @@
     </div>
   </div>
 
+  <!-- мои кубики -->
+  <div id="skinModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>🎨 Мои кубики</h2>
+      <p class="muted center" id="chipsBalance"></p>
+      <div class="skin-grid" id="skinGrid"></div>
+      <button class="btn primary" id="skinCloseBtn">Готово</button>
+    </div>
+  </div>
+
+  <!-- админ: действия с игроком -->
+  <div id="playerModal" class="modal hidden">
+    <div class="modal-card admin">
+      <h2 id="pmName"></h2>
+      <div class="pm-rig" id="pmRig"></div>
+      <div class="field-label">Следующий бросок: тап по кубику меняет значение (? — случайно)</div>
+      <div class="pm-dice" id="pmDice"></div>
+      <div class="row-btns">
+        <button class="btn small gold" id="pmExactBtn">🎯 Задать</button>
+        <button class="btn small ghost" id="pmUnrigBtn">Снять подкрутку</button>
+      </div>
+      <div class="chips" id="pmPresets"></div>
+      <div class="field-label">Естественно (сервер сам подберёт кубики)</div>
+      <div class="row-btns three">
+        <button class="btn small" data-rig="bolt">🔩 Болт</button>
+        <button class="btn small" data-rig="low">🙂 Мало</button>
+        <button class="btn small" data-rig="good">💰 Хорошо</button>
+      </div>
+      <div class="field-label">Цель хода (держится, пока не выполнится или ход не кончится)</div>
+      <div class="row-btns three">
+        <button class="btn small" data-rig="samosval">🚛 Самосвал</button>
+        <button class="btn small" data-rig="win">🏆 Победа</button>
+        <button class="btn small" data-rig="pit" id="pmPitBtn">🕳 Из ямы</button>
+      </div>
+      <div class="field-label">Счёт</div>
+      <div class="force-row">
+        <input class="input" id="pmScore" type="number" step="5" inputmode="numeric">
+        <button class="btn small" id="pmScoreBtn">✓</button>
+      </div>
+      <div class="row-btns three">
+        <button class="btn small" id="pmBoltBtn">🔩 Болт</button>
+        <button class="btn small" id="pmTruckBtn">🚛 Самосвал</button>
+        <button class="btn small danger" id="pmKickBtn">✕ Исключить</button>
+      </div>
+      <div class="pm-human" id="pmHuman">
+        <div class="field-label">Фишки</div>
+        <div class="force-row">
+          <input class="input" id="pmChips" type="number" step="50" inputmode="numeric">
+          <button class="btn small" id="pmChipsBtn">✓</button>
+        </div>
+        <div class="field-label">Личные скины</div>
+        <div class="row-btns">
+          <button class="btn small" data-grant="pink">🌸 Розовые</button>
+          <button class="btn small" data-grant="gold">✨ Золотые</button>
+        </div>
+        <div class="row-btns">
+          <button class="btn small ghost" data-revoke="pink">Забрать 🌸</button>
+          <button class="btn small ghost" data-revoke="gold">Забрать ✨</button>
+        </div>
+      </div>
+      <button class="btn ghost" id="pmCloseBtn">Закрыть</button>
+    </div>
+  </div>
+
   <div id="errorToast" class="error-toast hidden"></div>
 
-  <script type="module" src="/static/app.js?v=2"></script>
+  <script type="module" src="/static/app.js?v=3"></script>
 </body>
 </html>
