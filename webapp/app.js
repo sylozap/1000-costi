@@ -1620,10 +1620,8 @@ onTap('admAnnounceBtn', () => {
 });
 
 function syncSoundBtn() { $('soundBtn').textContent = snd.isEnabled() ? '🔊' : '🔇'; }
-onTap('soundBtn', () => {
-  snd.setEnabled(!snd.isEnabled());
-  syncSoundBtn();
-});
+onTap('soundBtn', () => snd.setEnabled(!snd.isEnabled()));
+snd.onChange(syncSoundBtn);
 syncSoundBtn();
 function syncThemeBtn() { $('themeBtn').textContent = window.appTheme?.get() === 'light' ? '🌙' : '☀️'; }
 onTap('themeBtn', () => window.appTheme?.toggle());

@@ -1,23 +1,98 @@
 // Звуки синтезируются WebAudio — без файлов. Вибрация через Telegram HapticFeedback.
+//
+// Почему звук мог пропадать: браузер разрешает звук только после жеста пользователя, а после
+// сворачивания Telegram контекст засыпает (на iOS — в состояние «interrupted»). Поэтому:
+//  - контекст будится любым касанием экрана, а не только отдельными кнопками;
+//  - при возврате в приложение контекст пробуем разбудить сразу, а если система не дала —
+//    пересоздаём его при следующем касании;
+//  - пока приложение свёрнуто, контекст усыпляем сами, чтобы не было «хвостов» звука;
+//  - выбор «звук вкл/выкл» хранится и на устройстве, и в облаке Telegram.
 const tg = window.Telegram?.WebApp;
+const AC = window.AudioContext || window.webkitAudioContext;
 let ctx = null;
+let primed = false; // в контексте уже проигран беззвучный буфер (нужно iOS внутри жеста)
+let stale = false; // система не дала разбудить контекст — пересоздать при следующем касании
 let enabled = true;
+let touched = false; // игрок сам переключил звук — облачное значение больше не применяем
+const listeners = new Set();
+
 try { enabled = localStorage.getItem('sound') !== 'off'; } catch (e) { /* без localStorage */ }
+const cloud = tg?.isVersionAtLeast?.('6.9') ? tg.CloudStorage : null;
+try {
+  cloud?.getItem('sound', (err, v) => {
+    if (!err && !touched && (v === 'on' || v === 'off')) apply(v === 'on', false);
+  });
+} catch (e) { /* старый клиент Telegram */ }
+
+// iPhone: играть и в беззвучном режиме (выключается кнопкой 🔊 в игре)
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* нет API */ }
+
+function apply(v, persist) {
+  enabled = v;
+  if (persist) {
+    try { localStorage.setItem('sound', v ? 'on' : 'off'); } catch (e) { /* без localStorage */ }
+    try { cloud?.setItem('sound', v ? 'on' : 'off'); } catch (e) { /* старый клиент Telegram */ }
+  }
+  listeners.forEach((fn) => fn(v));
+}
 
 export function isEnabled() { return enabled; }
+/** Подписка на смену настройки (кнопка 🔊 должна показывать актуальное состояние). */
+export function onChange(fn) { listeners.add(fn); }
 export function setEnabled(v) {
-  enabled = v;
-  try { localStorage.setItem('sound', v ? 'on' : 'off'); } catch (e) { /* без localStorage */ }
+  touched = true;
+  apply(!!v, true);
+  if (v) {
+    unlock();
+    play('pop'); // слышно сразу, что звук включился
+  }
+}
+/** Состояние для отладки: none | running | suspended | interrupted | closed. */
+export function state() { return ctx ? ctx.state : 'none'; }
+
+/** Будит звук. Вызывается из любого касания экрана (см. ниже), повторные вызовы безопасны. */
+export function unlock() {
+  if (!AC) return;
+  if (ctx && (ctx.state === 'closed' || (stale && ctx.state !== 'running'))) {
+    try { ctx.close(); } catch (e) { /* уже закрыт */ }
+    ctx = null;
+  }
+  if (!ctx) {
+    try { ctx = new AC(); } catch (e) { return; }
+    primed = false;
+    stale = false;
+  }
+  if (ctx.state !== 'running') ctx.resume?.().catch(() => {});
+  if (!primed) {
+    primed = true;
+    const src = ctx.createBufferSource();
+    src.buffer = ctx.createBuffer(1, 1, 22050);
+    src.connect(ctx.destination);
+    src.start(0);
+  }
 }
 
-/** Вызывать из обработчика нажатия: браузеры разрешают звук только после жеста. */
-export function unlock() {
-  if (!ctx) {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) ctx = new AC();
-  }
-  if (ctx && ctx.state === 'suspended') ctx.resume();
+function wake() {
+  if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return;
+  ctx.resume?.().catch(() => {});
+  // если система не разбудила контекст за полсекунды, при следующем касании создаём новый
+  setTimeout(() => { if (ctx && ctx.state !== 'running') stale = true; }, 500);
 }
+
+function sleep() {
+  if (ctx && ctx.state === 'running') ctx.suspend?.().catch(() => {});
+}
+
+for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
+  document.addEventListener(ev, () => { if (!ctx || ctx.state !== 'running') unlock(); }, { capture: true, passive: true });
+}
+document.addEventListener('visibilitychange', () => (document.hidden ? sleep() : wake()));
+window.addEventListener('pageshow', wake);
+window.addEventListener('focus', wake);
+try {
+  tg?.onEvent?.('activated', wake);
+  tg?.onEvent?.('deactivated', sleep);
+} catch (e) { /* старый клиент Telegram */ }
 
 function ready() { return enabled && ctx && ctx.state === 'running'; }
 
