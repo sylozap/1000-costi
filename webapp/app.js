@@ -1,6 +1,8 @@
+import { lineChart, seriesColor } from './charts.js';
 import { DiceTable, faceCanvas } from './dice3d.js';
 import { MAP_ICONS } from './maps.js';
 import * as snd from './sound.js';
+import { renderGameDetail, renderProfile, renderRecords } from './views.js';
 
 const tg = window.Telegram?.WebApp;
 const $ = (id) => document.getElementById(id);
@@ -41,12 +43,6 @@ let finishBank = null;
 let prevMap = null;
 let pmUid = null; // игрок, открытый в админском окне
 let pmDice = [0, 0, 0, 0, 0];
-// категориальная палитра графика итогов (dataviz: порядок фиксирован, отдельно для тёмной и светлой темы)
-const SERIES = {
-  dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
-  light: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948'],
-};
-
 // ---------- Telegram ----------
 if (tg) {
   tg.ready();
@@ -195,6 +191,18 @@ function onMessage(m) {
       break;
     case 'profile':
       renderSkins(m);
+      break;
+    case 'profile_full':
+      renderProfile($('profileBody'), m, viewCtx);
+      openSheet('profileModal');
+      break;
+    case 'records':
+      renderRecords($('recordsBody'), m, viewCtx);
+      openSheet('recordsModal');
+      break;
+    case 'game_detail':
+      renderGameDetail($('gameBody'), m.game, viewCtx);
+      openSheet('gameModal');
       break;
     case 'bank':
       finishBank = m;
@@ -536,7 +544,27 @@ function onAchievement(m) {
 // ---------- отрисовка ----------
 function showScreen(id) {
   for (const sid of ['screenMsg', 'screenLobby', 'screenGame']) $(sid).classList.toggle('hidden', sid !== id);
+  $('app').classList.toggle('playing', id === 'screenGame');
 }
+
+// ---------- листы, меню, профиль ----------
+function openSheet(id) {
+  $(id).classList.remove('hidden');
+  $(id).querySelector('.modal-card').scrollTop = 0;
+}
+
+function openProfile(uid) {
+  send({ type: 'profile_full', uid });
+}
+
+const viewCtx = {
+  get me() { return me; },
+  avatar: (uid, name) => avatar(uid, name),
+  skinSrc: (id) => swatch(id),
+  mapName: (id) => mapName(id),
+  openGame: (id) => send({ type: 'game_detail', id }),
+  openProfile: (uid) => openProfile(uid),
+};
 
 function showMessage(title, text) {
   $('msgTitle').textContent = title;
@@ -604,6 +632,7 @@ function render(s) {
   }
   renderGame(s);
   showScreen('screenGame');
+  if (!$('finishModal').classList.contains('hidden') && s.status === 'finished') renderSummary(s);
   if (!$('adminModal').classList.contains('hidden')) renderAdminGame(s);
   if (!$('playerModal').classList.contains('hidden')) renderPlayerSheet(s);
 }
@@ -612,115 +641,184 @@ function canEditRules(s) {
   return (me === s.owner && s.status === 'lobby') || isAdmin;
 }
 
+const TEAM_COLORS = ['#e5484d', '#3e7bfa', '#2fb67c', '#e8b10e'];
+const MAP_NAMES = { felt: 'Сукно', octagon: 'Октагон MMA', ring: 'Ринг', bar: 'Барная стойка', casino: 'Казино', space: 'Космос', beach: 'Пляж', snow: 'Снег' };
+const mapName = (id) => `${MAP_ICONS[id || 'felt'] || ''} ${state?.maps?.[id] || MAP_NAMES[id] || MAP_NAMES.felt}`.trim();
+const mapImg = (id) => `/static/img/maps/${id || 'felt'}.jpg`;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+/** Строка игрока в лобби: аватар, имя, фишки/бот, кнопки создателя. */
+function lobbyRow(s, p) {
+  const isOwner = me === s.owner;
+  const bot = p.uid < 0;
+  const row = el('div', 'player-row' + (bot ? '' : ' tappable'));
+  const name = el('span', 'name', crowned(s, p.uid, p.name) + (p.uid === me ? ' (ты)' : ''));
+  name.appendChild(el('span', 'sub', bot ? 'бот' : `🪙 ${s.chips?.[p.uid] ?? ''}`));
+  row.append(avatar(p.uid, p.name), name);
+  if (p.uid === s.owner) row.appendChild(el('span', 'tag', 'создатель'));
+  if (!bot) {
+    const dot = el('span', 'online-dot' + (s.online.includes(p.uid) ? ' on' : ''));
+    row.appendChild(dot);
+    row.onclick = () => openProfile(p.uid);
+  }
+  if (isOwner && p.uid !== s.owner) {
+    const k = el('button', 'kick', '✕');
+    k.setAttribute('aria-label', `Убрать ${p.name}`);
+    k.onclick = (e) => {
+      e.stopPropagation();
+      confirmThen(`Убрать ${p.name} из игры?`, () => send({ type: 'kick', uid: p.uid }));
+    };
+    row.appendChild(k);
+  }
+  return row;
+}
+
 function renderLobby(s) {
   const isOwner = me === s.owner;
   const editable = canEditRules(s);
   const isMember = s.members.some((p) => p.uid === me);
+  const teams = !!s.settings.teams;
   $('lobbyCount').textContent = `${s.members.length}/${s.max_players}`;
-  const ul = $('lobbyPlayers');
-  ul.innerHTML = '';
-  for (const p of s.members) {
-    const li = document.createElement('li');
-    const dot = document.createElement('span');
-    dot.className = 'online-dot' + (s.online.includes(p.uid) ? ' on' : '');
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = crowned(s, p.uid, p.name) + (p.uid === me ? ' (ты)' : '');
-    const bot = p.uid < 0;
-    li.append(avatar(p.uid, p.name), name);
-    if (!bot) {
-      const chips = document.createElement('span');
-      chips.className = 'chips-count';
-      chips.textContent = `🪙 ${s.chips?.[p.uid] ?? ''}`;
-      li.append(chips, dot);
+  const box = $('lobbyPlayers');
+  box.innerHTML = '';
+  if (teams) {
+    const of = s.team_of || {};
+    const used = new Set(Object.values(of));
+    const count = Math.min(4, Math.max(2, Math.ceil(s.members.length / 2), ...[...used].map((t) => t + 1)));
+    for (let t = 0; t < count; t++) {
+      const block = el('div', 'team-block');
+      const members = s.members.filter((p) => of[p.uid] === t);
+      const head = el('div', 'team-head');
+      const dot = el('span', 'team-dot');
+      dot.style.background = TEAM_COLORS[t];
+      head.append(dot, el('span', null, `${s.team_names[t].replace(/^\S+\s/, '')} · ${members.length}/2`));
+      if (isMember && of[me] !== t && members.length < 2) {
+        const join = el('button', 'link-btn join', 'Сюда');
+        join.onclick = () => send({ type: 'team', team: t });
+        head.appendChild(join);
+      }
+      block.appendChild(head);
+      for (const p of members) {
+        const row = lobbyRow(s, p);
+        if (isOwner && p.uid < 0) { // бота переставляет создатель
+          const mv = el('button', 'kick', '⇄');
+          mv.onclick = (e) => {
+            e.stopPropagation();
+            const next = [1, 2, 3, 4].map((d) => (t + d) % count).find((x) => s.members.filter((q) => of[q.uid] === x).length < 2);
+            if (next != null) send({ type: 'team', uid: p.uid, team: next });
+          };
+          row.insertBefore(mv, row.lastChild);
+        }
+        block.appendChild(row);
+      }
+      for (let i = members.length; i < 2; i++) block.appendChild(el('div', 'empty-slot', 'свободно'));
+      box.appendChild(block);
     }
-    if (p.uid === s.owner) {
-      const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.textContent = 'создатель';
-      li.appendChild(tag);
-    } else if (isOwner) {
-      const k = document.createElement('button');
-      k.className = 'kick';
-      k.textContent = 'убрать';
-      k.onclick = () => confirmThen(`Убрать ${p.name} из игры?`, () => send({ type: 'kick', uid: p.uid }));
-      li.appendChild(k);
-    }
-    ul.appendChild(li);
+  } else {
+    for (const p of s.members) box.appendChild(lobbyRow(s, p));
   }
   $('joinBtn').classList.toggle('hidden', isMember || s.members.length >= s.max_players);
-  const bots = $('botBtns');
-  bots.classList.toggle('hidden', !isOwner || s.members.length >= s.max_players);
-  if (isOwner && !bots.childElementCount) {
-    for (const [style, title] of Object.entries(s.bot_styles || {})) {
-      const b = document.createElement('button');
-      b.className = 'btn tiny ghost';
-      b.textContent = '+ ' + title;
-      b.onclick = () => send({ type: 'add_bot', style });
-      bots.appendChild(b);
-    }
-  }
+  $('addBotBtn').classList.toggle('hidden', !isOwner || s.members.length >= s.max_players);
+  $('shuffleBtn').classList.toggle('hidden', !isOwner || !teams);
 
-  const maps = $('mapList');
-  maps.innerHTML = '';
-  for (const [id, title] of Object.entries(s.maps || {})) {
-    const b = document.createElement('button');
-    b.className = 'chip' + (id === s.settings.map ? ' on' : '');
-    b.textContent = `${MAP_ICONS[id] || ''} ${title}`;
-    b.disabled = !editable;
-    b.onclick = () => send({ type: 'settings', map: id });
-    maps.appendChild(b);
-  }
-  const hasBots = Object.keys(s.bots || {}).length > 0;
-  $('segStake').classList.toggle('locked', !editable || hasBots);
-  $('segStake').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === String(s.settings.stake)));
-  $('stakeNote').textContent = hasBots ? 'С ботами играем без ставок.'
-    : s.settings.stake ? `Каждый вносит ${s.settings.stake} 🪙, победитель забирает банк. При отмене взносы возвращаются.`
-      : 'Фишки: у каждого 1000 🪙 на старте, раз в сутки +100, если осталось меньше 200.';
-
-  // пресеты
+  // строки настроек
   $('presetName').textContent = s.preset;
+  $('mapValue').textContent = mapName(s.settings.map);
+  $('mapThumb').src = mapImg(s.settings.map);
+  $('timerValue').textContent = s.settings.timer ? `${s.settings.timer} с` : 'выкл';
+  $('stakeValue').textContent = s.settings.stake ? `${s.settings.stake} 🪙` : 'без ставок';
+  $('teamsToggle').checked = teams;
+  $('teamsToggle').disabled = !editable;
+  document.querySelector('.settings').classList.toggle('locked', !editable);
+
+  // лист «Правила»
   const list = $('presetList');
   list.innerHTML = '';
   const presets = myPresets.length ? myPresets : [{ id: 'classic', name: 'Классика' }, { id: 'v2', name: 'Вариант 2' }];
-  for (const p of presets) {
-    const b = document.createElement('button');
-    b.className = 'chip' + (p.name === s.preset ? ' on' : '');
-    b.textContent = p.name;
+  for (const pr of presets) {
+    const b = el('button', 'chip' + (pr.name === s.preset ? ' on' : ''), pr.name);
     b.disabled = !editable;
-    b.onclick = () => send({ type: 'preset', id: p.id });
+    b.onclick = () => send({ type: 'preset', id: pr.id });
     list.appendChild(b);
   }
-  if (s.preset === 'Свои') {
-    const c = document.createElement('span');
-    c.className = 'chip on static';
-    c.textContent = 'Свои';
-    list.appendChild(c);
+  if (s.preset === 'Свои') list.appendChild(el('span', 'chip on', 'Свои'));
+  for (const [seg, val] of [['segBarrel', s.rules.barrel], ['segTimer', s.settings.timer], ['segStake', s.settings.stake]]) {
+    const sg = $(seg);
+    sg.classList.toggle('locked', !editable);
+    sg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === String(val)));
   }
-
-  for (const [seg, val] of [['segBarrel', s.rules.barrel], ['segTimer', s.settings.timer]]) {
-    const el = $(seg);
-    el.classList.toggle('locked', !editable);
-    el.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === String(val)));
-  }
+  const hasBots = Object.keys(s.bots || {}).length > 0;
+  if (hasBots) $('segStake').classList.add('locked');
   const sum = $('rulesSummary');
   sum.innerHTML = '';
   for (const [head, text] of s.rules_text) {
     if (head === 'Очки за бросок' || head === 'Ход') continue;
-    const li = document.createElement('li');
-    li.innerHTML = '<b></b> <span></span>';
-    li.querySelector('b').textContent = head + ':';
-    li.querySelector('span').textContent = text;
+    const li = el('li');
+    li.append(el('b', null, head + ': '), document.createTextNode(text));
     sum.appendChild(li);
   }
   $('editRulesBtn').textContent = editable ? '⚙️ Настроить' : '📖 Все правила';
+  $('stakeNote').textContent = hasBots ? 'С ботами играем без ставок.'
+    : s.settings.stake ? `Каждый вносит ${s.settings.stake} 🪙, победитель забирает банк (в командах — делят). При отмене взносы возвращаются.`
+      : 'У каждого 1000 🪙 на старте, раз в сутки +100, если осталось меньше 200.';
+
+  // лист «Карта»
+  const maps = $('mapList');
+  maps.innerHTML = '';
+  for (const [id, title] of Object.entries(s.maps || MAP_NAMES)) {
+    const b = el('button', 'map-tile' + (id === s.settings.map ? ' on' : ''));
+    const img = document.createElement('img');
+    img.src = mapImg(id);
+    img.alt = '';
+    img.loading = 'lazy';
+    b.append(img, el('span', null, `${MAP_ICONS[id] || ''} ${title}`));
+    b.disabled = !editable;
+    b.onclick = () => {
+      send({ type: 'settings', map: id });
+      $('mapSheet').classList.add('hidden');
+    };
+    maps.appendChild(b);
+  }
+
+  // лист «Боты»
+  const bots = $('botBtns');
+  if (!bots.childElementCount) {
+    const desc = { careful: 'осторожный, бережёт очки', balanced: 'играет по математике', risky: 'рискует до последнего' };
+    for (const [style, title] of Object.entries(s.bot_styles || {})) {
+      const b = el('button', 'row');
+      b.append(el('span', 'row-icon', '🤖'), el('span', 'row-label', title.replace('🤖 ', '')), el('span', 'row-value', desc[style] || ''));
+      b.onclick = () => {
+        send({ type: 'add_bot', style });
+        $('botSheet').classList.add('hidden');
+      };
+      bots.appendChild(b);
+    }
+  }
+
   const owner = s.members.find((p) => p.uid === s.owner);
   $('ownerNote').textContent = isOwner
-    ? 'Ты создатель: выбери правила и жми «Начать», когда все соберутся.'
+    ? (teams ? 'Команды по двое: в каждой ровно два игрока, команд от двух.' : '')
     : `Правила выбирает и игру запускает ${owner?.name || 'создатель'}.`;
   $('startBtn').classList.toggle('hidden', !isOwner);
-  $('startBtn').textContent = s.members.length < 2 ? 'Начать (одному)' : `Начать игру (${s.members.length})`;
+  $('startBtn').textContent = s.members.length < 2 ? 'Начать одному' : `Начать игру · ${s.members.length}`;
   $('leaveLobbyBtn').classList.toggle('hidden', !isMember);
+  $('leaveLobbyBtn').classList.toggle('grow', !isOwner);
+}
+
+/** Порядок карточек на полосе: по очереди ходов (команды — вместе). */
+function stripOrder(g) {
+  if (g.phase !== 'play' || !g.order?.length) return g.players;
+  const seen = new Set();
+  const ids = g.order.filter((u) => !seen.has(u) && seen.add(u));
+  const list = ids.map((u) => g.players.find((p) => p.uid === u)).filter(Boolean);
+  if (g.teams) list.sort((a, b) => (a.team ?? 0) - (b.team ?? 0));
+  return list;
 }
 
 function renderGame(s) {
@@ -732,49 +830,48 @@ function renderGame(s) {
   $('pauseOverlay').classList.toggle('hidden', !s.paused);
 
   const box = $('players');
-  box.classList.toggle('solo', g.players.length === 1);
   box.innerHTML = '';
-  for (const p of g.players) {
-    const chip = document.createElement('div');
-    chip.className = 'pchip' + (p.uid === g.current_uid ? ' current' : '') + (p.uid === me ? ' me' : '')
-      + (isAdmin ? ' tappable' : '');
+  for (const p of stripOrder(g)) {
+    const chip = el('div', 'pchip tappable' + (p.uid === g.current_uid ? ' current' : '') + (p.uid === me ? ' me' : ''));
     chip.dataset.uid = p.uid;
-    if (isAdmin) chip.onclick = () => openPlayerSheet(p.uid);
-    const row = document.createElement('div');
-    row.className = 'prow';
-    const dot = document.createElement('span');
-    dot.className = 'online-dot' + (s.online.includes(p.uid) ? ' on' : '');
-    const name = document.createElement('span');
-    name.className = 'pname';
-    name.textContent = crowned(s, p.uid, p.name);
-    const score = document.createElement('span');
-    score.className = 'pscore';
-    score.textContent = p.score;
+    chip.onclick = () => (isAdmin ? openPlayerSheet(p.uid) : p.uid >= 0 && openProfile(p.uid));
+    if (g.teams && p.team != null) {
+      const stripe = el('div', 'team-stripe');
+      stripe.style.background = TEAM_COLORS[p.team];
+      chip.appendChild(stripe);
+    }
+    const row = el('div', 'prow');
+    row.append(el('span', 'online-dot' + (s.online.includes(p.uid) || p.uid < 0 ? ' on' : '')), el('span', 'pname', crowned(s, p.uid, p.name)));
+    const score = el('div', 'pscore', String(p.score));
     if (prevScores.has(p.uid) && prevScores.get(p.uid) !== p.score) score.classList.add('bump');
     prevScores.set(p.uid, p.score);
-    row.append(dot, name, score);
-    const badges = document.createElement('div');
-    badges.className = 'badges';
-    const add = (text, cls = '') => {
-      const b = document.createElement('span');
-      b.className = 'badge ' + cls;
-      b.textContent = text;
-      badges.appendChild(b);
-    };
+    const bar = el('div', 'progress');
+    const fill = el('i');
+    fill.style.width = `${Math.min(100, Math.max(0, p.score / 10))}%`;
+    bar.appendChild(fill);
+    const meta = el('div', 'pmeta');
+    const badges = el('div', 'badges');
+    const add = (text, cls = '') => badges.appendChild(el('span', 'badge ' + cls, text));
     if (isAdmin && s.rigs?.[p.uid]) add(`🎯 ${s.rigs[p.uid]}`, 'rig');
     if (g.phase === 'order') {
       add(p.order_rolls.length ? `🎲 ${p.order_rolls.join(' → ')}` : '🎲 ждём', p.order_pending ? 'warn' : '');
     } else {
       if (!p.opened && r.open_min) add('не открыт');
       if (p.debt) add(`долг ${p.debt}`, 'bad');
-      if (p.in_pit) add('🕳 яма', 'warn');
+      if (p.in_pit) add('🕳', 'warn');
       if (p.on_barrel) add(`🛢 ${p.barrel_attempts}/${r.barrel_attempts}`, 'warn swing');
       if (p.barrel_falls) add(`💥${p.barrel_falls}`, 'bad');
       if (p.bolts) add(`🔩${'●'.repeat(p.bolts)}`, 'bad');
-      if (p.dots) add(`точки ${p.dots}/${r.dots_limit}`, 'bad');
-      if (p.dot_penalties) add(`штраф ${p.dot_penalties}/${r.dot_penalties_limit}`, 'bad');
+      if (p.dots) add(`• ${p.dots}/${r.dots_limit}`, 'bad');
     }
-    chip.append(row, badges);
+    meta.appendChild(badges);
+    const chance = s.winprob?.[p.uid];
+    if (chance != null && g.phase === 'play') {
+      const c = el('span', 'chance', 'шанс ');
+      c.appendChild(el('b', null, `${Math.round(chance * 100)}%`));
+      meta.appendChild(c);
+    }
+    chip.append(row, score, bar, meta);
     box.appendChild(chip);
   }
 
@@ -787,22 +884,15 @@ function renderGame(s) {
     $('turnPoints').parentElement.classList.add('hidden');
     $('hint').textContent = 'Все бросают 5 кубиков — у кого сумма больше, тот ходит первым.';
   } else if (g.phase === 'play') {
-    $('turnWho').textContent = cur.uid === me ? '🎯 Твой ход' : `Ходит: ${crowned(s, cur.uid, cur.name)}`;
+    $('turnWho').textContent = cur.uid === me ? 'Твой ход' : `Ходит ${crowned(s, cur.uid, cur.name)}`;
     $('turnPoints').parentElement.classList.remove('hidden');
     $('turnPoints').textContent = g.turn_points;
-    if (g.kept.length) {
-      const lbl = document.createElement('span');
-      lbl.textContent = 'отложено:';
-      keptRow.appendChild(lbl);
-      g.kept.forEach((v) => keptRow.appendChild(miniDie(v)));
-    }
-    const left = document.createElement('span');
-    left.textContent = g.rolls_in_turn ? ` · в руке ${g.dice_left}` : `${cur.name}: ${cur.score} очков`;
-    keptRow.appendChild(left);
+    g.kept.forEach((v) => keptRow.appendChild(miniDie(v)));
+    keptRow.appendChild(el('span', null, g.rolls_in_turn ? `в руке ${g.dice_left}` : `счёт ${cur.score}`));
     $('hint').textContent = g.hint;
   } else {
-    const w = g.players.find((p) => p.uid === g.winner_uid);
-    $('turnWho').textContent = w ? `🏆 Победил(а) ${w.name}` : 'Игра окончена';
+    const ws = g.players.filter((p) => (g.winners?.length ? g.winners : [g.winner_uid]).includes(p.uid));
+    $('turnWho').textContent = ws.length ? `🏆 Победа: ${ws.map((p) => p.name).join(' и ')}` : 'Игра окончена';
     $('turnPoints').parentElement.classList.add('hidden');
     $('hint').textContent = '';
   }
@@ -812,40 +902,30 @@ function renderGame(s) {
   const ul = $('logList');
   ul.innerHTML = '';
   for (const e of g.log) {
-    const li = document.createElement('li');
-    li.textContent = e.text;
-    if (e.notable) li.className = 'notable';
+    const li = el('li', e.notable ? 'notable' : '', e.text);
     ul.prepend(li);
   }
-  $('logLast').textContent = g.log.length ? '· ' + g.log[g.log.length - 1].text : '';
 
-  // реакции и стикеры
+  // реакции и стикеры (собираются один раз)
   const bar = $('reactBar');
   if (!bar.childElementCount) {
     for (const em of s.reactions) {
-      const b = document.createElement('button');
-      b.textContent = em;
+      const b = el('button', null, em);
       b.onclick = () => {
         snd.unlock();
         send({ type: 'react', emoji: em });
+        $('reactSheet').classList.add('hidden');
       };
       bar.appendChild(b);
     }
-    const st = document.createElement('button');
-    st.className = 'sticker-btn';
-    st.textContent = '🗯';
-    st.onclick = () => $('stickerTray').classList.toggle('hidden');
-    bar.appendChild(st);
     const tray = $('stickerTray');
     for (const [id, [emoji, text]] of Object.entries(s.stickers)) {
-      const b = document.createElement('button');
-      b.innerHTML = '<span></span><small></small>';
-      b.querySelector('span').textContent = emoji;
-      b.querySelector('small').textContent = text;
+      const b = el('button');
+      b.append(el('span', null, emoji), el('small', null, text));
       b.onclick = () => {
         snd.unlock();
         send({ type: 'sticker', id });
-        tray.classList.add('hidden');
+        $('reactSheet').classList.add('hidden');
       };
       tray.appendChild(b);
     }
@@ -853,6 +933,7 @@ function renderGame(s) {
 
   $('leaveGameBtn').classList.toggle('hidden', !inGame || g.phase === 'finished');
   $('endBtn').classList.toggle('hidden', me !== s.owner || g.phase === 'finished');
+  $('moreBtn').classList.toggle('hidden', (!inGame && me !== s.owner) || g.phase === 'finished');
 
   // смена хода
   if (g.current_uid !== prevCurrent) {
@@ -863,6 +944,7 @@ function renderGame(s) {
       snd.play('turn');
       snd.haptic.notify('success');
     }
+    chipEl(g.current_uid)?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
   }
 
   // итоги
@@ -885,7 +967,8 @@ function renderRisk(s, mineTurn) {
   const n = g.dice_left;
   const p = Math.round(g.risk[n - 1] * 100);
   el.className = 'risk ' + (p >= 50 ? 'high' : p >= 25 ? 'mid' : 'low');
-  el.textContent = `${mineTurn ? 'Риск сгореть' : 'Риск пустого броска'} при броске ${n} куб.: ${p}%`;
+  el.textContent = `риск ${p}%`;
+  el.title = `${mineTurn ? 'Риск сгореть' : 'Риск пустого броска'} при броске ${n} куб.`;
 }
 
 function renderActions(s) {
@@ -969,32 +1052,65 @@ function showFinish(s) {
   toastQueue.length = 0;
   $('toast').classList.add('hidden');
   const g = s.game;
-  const w = g.players.find((p) => p.uid === g.winner_uid);
-  $('finishTitle').textContent = w ? (w.uid === me ? 'Ты победил(а)!' : `Победил(а) ${w.name}`) : 'Игра окончена';
-  const ol = $('ranking');
-  ol.innerHTML = '';
-  const ranked = [...g.players].sort((a, b) => (b.uid === g.winner_uid) - (a.uid === g.winner_uid) || b.score - a.score);
-  for (const p of ranked) {
-    const li = document.createElement('li');
-    li.textContent = crowned(s, p.uid, p.name);
-    const sc = document.createElement('span');
-    sc.textContent = p.score;
-    li.appendChild(sc);
-    ol.appendChild(li);
+  const winners = g.winners?.length ? g.winners : [g.winner_uid];
+  const iWon = winners.includes(me);
+  const wnames = g.players.filter((p) => winners.includes(p.uid)).map((p) => p.name).join(' и ');
+  $('finishTitle').textContent = g.winner_uid == null ? 'Игра окончена' : iWon ? 'Ты победил(а)! 🏆' : `Победа: ${wnames}`;
+  const box = $('ranking');
+  box.innerHTML = '';
+  if (g.teams) {
+    const teams = {};
+    for (const p of g.players) (teams[p.team] ||= []).push(p);
+    const ranked = Object.entries(teams).sort(([, a], [, b]) => winners.includes(b[0].uid) - winners.includes(a[0].uid) || b[0].score - a[0].score);
+    ranked.forEach(([t, ms], i) => {
+      const row = el('div', 'row' + (winners.includes(ms[0].uid) ? ' win' : ''));
+      const dot = el('span', 'team-dot');
+      dot.style.background = TEAM_COLORS[t];
+      row.append(el('span', 'place', winners.includes(ms[0].uid) ? '🏆' : String(i + 1)), dot,
+        el('span', 'row-label', ms.map((p) => p.name).join(' и ')), el('span', 'score', String(ms[0].score)));
+      box.appendChild(row);
+    });
+  } else {
+    const ranked = [...g.players].sort((a, b) => winners.includes(b.uid) - winners.includes(a.uid) || b.score - a.score);
+    ranked.forEach((p, i) => {
+      const row = el(p.uid >= 0 ? 'button' : 'div', 'row' + (winners.includes(p.uid) ? ' win' : ''));
+      row.append(el('span', 'place', winners.includes(p.uid) ? '🏆' : String(i + 1)), avatar(p.uid, p.name),
+        el('span', 'row-label', crowned(s, p.uid, p.name)), el('span', 'score', String(p.score)));
+      if (p.uid >= 0) row.onclick = () => openProfile(p.uid);
+      box.appendChild(row);
+    });
   }
   const bankEl = $('finishBank');
   bankEl.classList.toggle('hidden', !finishBank);
-  if (finishBank) bankEl.textContent = `💰 ${finishBank.name} забирает банк: ${finishBank.amount} 🪙`;
-  renderSummary(g);
+  if (finishBank) bankEl.textContent = `💰 ${finishBank.name}: банк ${finishBank.amount} 🪙`;
+  renderSummary(s);
   const ach = $('finishAch');
   ach.innerHTML = '';
-  for (const a of finishAch) {
-    const d = document.createElement('div');
-    d.textContent = `${a.emoji} ${a.name}: «${a.title}»`;
-    ach.appendChild(d);
-  }
+  for (const a of finishAch) ach.appendChild(el('div', null, `${a.emoji} ${a.name}: «${a.title}»`));
   $('rematchBtn').classList.toggle('hidden', me !== s.owner);
   $('finishModal').classList.remove('hidden');
+}
+
+/** Графики итогов: счёт по ходам и шансы на победу (цвет закреплён за игроком, не за местом). */
+function renderSummary(s) {
+  const g = s.game;
+  const sum = g.summary;
+  const hl = $('finishHighlights');
+  hl.innerHTML = '';
+  for (const t of sum?.highlights || []) hl.appendChild(el('li', null, t));
+  const players = g.players;
+  const winners = g.winners?.length ? g.winners : [g.winner_uid];
+  const hist = sum?.history || [];
+  lineChart($('summaryChart'), players.map((p, i) => ({
+    name: p.name, color: seriesColor(i), bold: winners.includes(p.uid),
+    values: hist.map((h) => h.scores[p.uid] ?? 0),
+  })), { yMax: Math.max(1000, ...hist.flatMap((h) => Object.values(h.scores))), ticks: [0, 500, 1000], label: 'Счёт игроков по ходам' });
+  const wp = s.winprob_hist || [];
+  $('winprobLabel').classList.toggle('hidden', wp.length < 2);
+  lineChart($('winprobChart'), players.map((p, i) => ({
+    name: p.name, color: seriesColor(i), bold: winners.includes(p.uid),
+    values: wp.map((h) => Math.round(100 * (h.p[p.uid] ?? 0))),
+  })), { yMax: 100, ticks: [0, 50, 100], fmt: (v) => `${v}%`, label: 'Шансы на победу по ходам' });
 }
 
 // ---------- таймер ----------
@@ -1384,84 +1500,6 @@ function renderSkins(m) {
   }
 }
 
-// ---------- итоги партии: график счёта ----------
-function renderSummary(g) {
-  const box = $('summaryChart');
-  const hl = $('finishHighlights');
-  box.innerHTML = '';
-  hl.innerHTML = '';
-  const sum = g.summary;
-  if (!sum) return;
-  for (const h of sum.highlights) {
-    const li = document.createElement('li');
-    li.textContent = h;
-    hl.appendChild(li);
-  }
-  const hist = sum.history;
-  if (hist.length < 2) return;
-  const theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
-  // цвет закреплён за игроком (порядок ходов), а не за местом в итоговой таблице
-  const players = g.players.map((p, i) => ({ ...p, color: SERIES[theme][i % 8] }));
-  const W = 320, H = 170, L = 34, R = 10, T = 10, B = 22;
-  const maxY = Math.max(1000, ...hist.flatMap((h) => Object.values(h.scores)));
-  const x = (i) => L + ((W - L - R) * i) / (hist.length - 1);
-  const y = (v) => T + (H - T - B) * (1 - v / maxY);
-  const NS = 'http://www.w3.org/2000/svg';
-  const el = (tag, attrs, parent) => {
-    const e = document.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-    parent.appendChild(e);
-    return e;
-  };
-  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img',
-    'aria-label': 'Счёт игроков по ходам' }, box);
-  for (const v of [0, 500, 1000]) {
-    el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' }, svg);
-    el('text', { x: L - 6, y: y(v) + 3, class: 'axis', 'text-anchor': 'end' }, svg).textContent = v;
-  }
-  el('text', { x: W - R, y: H - 6, class: 'axis', 'text-anchor': 'end' }, svg).textContent = `ходов: ${hist.length - 1}`;
-  for (const p of players) {
-    const pts = hist.map((h, i) => `${x(i).toFixed(1)},${y(h.scores[p.uid] ?? 0).toFixed(1)}`).join(' ');
-    el('polyline', { points: pts, fill: 'none', stroke: p.color, 'stroke-width': p.uid === g.winner_uid ? 2.5 : 2,
-      'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
-  }
-  // наведение: вертикальная линия и подсказка со счётом всех
-  const cross = el('line', { y1: T, y2: H - B, class: 'cross', visibility: 'hidden' }, svg);
-  const tip = document.createElement('div');
-  tip.className = 'chart-tip hidden';
-  box.appendChild(tip);
-  const hit = el('rect', { x: L, y: 0, width: W - L - R, height: H, fill: 'transparent' }, svg);
-  const move = (ev) => {
-    const r = svg.getBoundingClientRect();
-    const px = ((ev.clientX - r.left) / r.width) * W;
-    const i = Math.max(0, Math.min(hist.length - 1, Math.round(((px - L) / (W - L - R)) * (hist.length - 1))));
-    cross.setAttribute('x1', x(i));
-    cross.setAttribute('x2', x(i));
-    cross.setAttribute('visibility', 'visible');
-    const rows = [...players].sort((a, b) => (hist[i].scores[b.uid] ?? 0) - (hist[i].scores[a.uid] ?? 0));
-    tip.innerHTML = `<b>Ход ${i}</b>` + rows.map((p) => `<div><i style="background:${p.color}"></i><span></span><em>${hist[i].scores[p.uid] ?? 0}</em></div>`).join('');
-    tip.querySelectorAll('span').forEach((sp, k) => { sp.textContent = rows[k].name; });
-    tip.classList.remove('hidden');
-    tip.style.left = `${Math.min(70, Math.max(0, (x(i) / W) * 100 - 15))}%`;
-  };
-  hit.addEventListener('pointermove', move);
-  hit.addEventListener('pointerdown', move);
-  hit.addEventListener('pointerleave', () => {
-    cross.setAttribute('visibility', 'hidden');
-    tip.classList.add('hidden');
-  });
-  const legend = document.createElement('div');
-  legend.className = 'legend';
-  for (const p of players) {
-    const it = document.createElement('span');
-    it.innerHTML = '<i></i>';
-    it.querySelector('i').style.background = p.color;
-    it.appendChild(document.createTextNode(p.name));
-    legend.appendChild(it);
-  }
-  box.appendChild(legend);
-}
-
 function renderAudit(list) {
   const ul = $('admLog');
   ul.innerHTML = '';
@@ -1525,18 +1563,78 @@ onTap('stopBtn', () => {
 onTap('startBtn', () => send({ type: 'start' }));
 onTap('joinBtn', () => send({ type: 'join' }));
 onTap('leaveLobbyBtn', () => confirmThen('Выйти из лобби?', () => send({ type: 'leave' })));
-onTap('leaveGameBtn', () => confirmThen('Выйти из игры? Вернуться будет нельзя.', () => send({ type: 'leave' })));
-onTap('endBtn', () => confirmThen('Завершить игру для всех?', () => send({ type: 'end' })));
+onTap('leaveGameBtn', () => {
+  $('moreSheet').classList.add('hidden');
+  confirmThen('Выйти из игры? Вернуться будет нельзя.', () => send({ type: 'leave' }));
+});
+onTap('endBtn', () => {
+  $('moreSheet').classList.add('hidden');
+  confirmThen('Завершить игру для всех?', () => send({ type: 'end' }));
+});
 onTap('rematchBtn', () => {
   $('finishModal').classList.add('hidden');
   send({ type: 'rematch' });
 });
 onTap('closeFinishBtn', () => $('finishModal').classList.add('hidden'));
-onTap('rulesBtn', () => {
-  renderRules();
-  $('rulesModal').classList.remove('hidden');
-});
 onTap('closeRulesBtn', () => $('rulesModal').classList.add('hidden'));
+
+// меню ☰
+onTap('menuBtn', () => {
+  syncThemeBtn();
+  openSheet('menuModal');
+});
+document.querySelectorAll('#menuModal [data-menu]').forEach((b) => b.addEventListener('click', () => {
+  snd.haptic.select();
+  const what = b.dataset.menu;
+  if (what === 'theme') {
+    window.appTheme?.toggle();
+    return;
+  }
+  $('menuModal').classList.add('hidden');
+  if (what === 'profile') openProfile(me);
+  else if (what === 'skins') {
+    openSheet('skinModal');
+    send({ type: 'my_profile' });
+  } else if (what === 'ach') send({ type: 'my_achievements' });
+  else if (what === 'records') send({ type: 'records' });
+  else if (what === 'rules') {
+    renderRules();
+    openSheet('rulesModal');
+  }
+}));
+
+// лобби: строки настроек открывают листы
+const lobbyEditable = () => state && canEditRules(state);
+onTap('rowRules', () => {
+  if (lobbyEditable()) openSheet('rulesSheet');
+  else {
+    renderRules();
+    openSheet('rulesModal');
+  }
+});
+onTap('rowMap', () => openSheet('mapSheet'));
+onTap('rowTimer', () => lobbyEditable() && openSheet('timerSheet'));
+onTap('rowStake', () => lobbyEditable() && openSheet('stakeSheet'));
+$('teamsToggle').addEventListener('change', (e) => {
+  snd.haptic.select();
+  send({ type: 'settings', teams: e.target.checked });
+});
+onTap('shuffleBtn', () => send({ type: 'shuffle_teams' }));
+onTap('addBotBtn', () => openSheet('botSheet'));
+
+// игра: панель инструментов
+onTap('reactBtn', () => openSheet('reactSheet'));
+onTap('logBtn', () => openSheet('logSheet'));
+onTap('moreBtn', () => openSheet('moreSheet'));
+onTap('pmProfileBtn', () => {
+  $('playerModal').classList.add('hidden');
+  if (pmUid >= 0) openProfile(pmUid);
+});
+
+// лист закрывается касанием по затемнённому фону
+document.querySelectorAll('.modal').forEach((m) => m.addEventListener('click', (e) => {
+  if (e.target === m && m.id !== 'editModal') m.classList.add('hidden');
+}));
 onTap('editRulesBtn', openEditor);
 onTap('editCancelBtn', () => $('editModal').classList.add('hidden'));
 onTap('editSaveBtn', () => {
@@ -1554,12 +1652,12 @@ onTap('shareCopyBtn', () => {
   navigator.clipboard?.writeText(sharedLink).then(() => showInfo('Ссылка скопирована'), () => showError('Не удалось скопировать'));
 });
 onTap('shareCloseBtn', () => $('shareModal').classList.add('hidden'));
-onTap('achBtn', () => send({ type: 'my_achievements' }));
 onTap('achCloseBtn', () => $('achModal').classList.add('hidden'));
 for (const [seg, key] of [['segBarrel', 'barrel'], ['segTimer', 'timer'], ['segStake', 'stake']]) {
   $(seg).querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
     snd.haptic.select();
     send({ type: 'settings', [key]: key === 'barrel' ? b.dataset.v : Number(b.dataset.v) });
+    if (key !== 'barrel') $(seg).closest('.modal').classList.add('hidden');
   }));
 }
 
@@ -1618,10 +1716,6 @@ document.querySelectorAll('#playerModal [data-grant], #playerModal [data-revoke]
   const skin = b.dataset.grant || b.dataset.revoke;
   send({ type: 'admin', op: 'grant_skin', uid: pmUid, skin, on: !!b.dataset.grant });
 }));
-onTap('skinBtn', () => {
-  $('skinModal').classList.remove('hidden');
-  send({ type: 'my_profile' });
-});
 onTap('skinCloseBtn', () => $('skinModal').classList.add('hidden'));
 onTap('admRoomsRefresh', () => send({ type: 'admin', op: 'rooms' }));
 onTap('admLogRefresh', () => send({ type: 'admin', op: 'audit' }));
@@ -1638,8 +1732,7 @@ function syncSoundBtn() { $('soundBtn').textContent = snd.isEnabled() ? '🔊' :
 onTap('soundBtn', () => snd.setEnabled(!snd.isEnabled()));
 snd.onChange(syncSoundBtn);
 syncSoundBtn();
-function syncThemeBtn() { $('themeBtn').textContent = window.appTheme?.get() === 'light' ? '🌙' : '☀️'; }
-onTap('themeBtn', () => window.appTheme?.toggle());
+function syncThemeBtn() { $('themeValue').textContent = window.appTheme?.get() === 'light' ? 'светлая' : 'тёмная'; }
 document.addEventListener('themechange', syncThemeBtn);
 syncThemeBtn();
 

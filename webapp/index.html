@@ -6,19 +6,16 @@
   <title>1000 — кости</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/theme.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
   <div id="app">
     <header class="topbar">
-      <div class="brand"><span class="logo">⚄</span> 1000</div>
+      <div class="brand"><span class="logo">⚄</span><span>1000</span></div>
       <div class="mode" id="modeChip"></div>
       <button class="icon-btn hidden" id="adminBtn" aria-label="Админ-панель">🛠</button>
-      <button class="icon-btn" id="skinBtn" aria-label="Мои кубики">🎨</button>
-      <button class="icon-btn" id="achBtn" aria-label="Ачивки">🏅</button>
-      <button class="icon-btn" id="rulesBtn" aria-label="Правила">?</button>
-      <button class="icon-btn" id="themeBtn" aria-label="Тема">☀️</button>
       <button class="icon-btn" id="soundBtn" aria-label="Звук">🔊</button>
+      <button class="icon-btn" id="menuBtn" aria-label="Меню">☰</button>
     </header>
 
     <div id="conn" class="conn hidden">Переподключение…</div>
@@ -29,62 +26,57 @@
         <div class="big-die">⚄</div>
         <h2 id="msgTitle">Подключаемся…</h2>
         <p id="msgText"></p>
-        <button class="btn ghost hidden" id="msgAdminBtn">🛠 Комнаты</button>
+        <button class="btn secondary hidden" id="msgAdminBtn">🛠 Комнаты</button>
       </div>
     </section>
 
     <!-- лобби -->
-    <section id="screenLobby" class="screen hidden">
-      <div class="card">
+    <section id="screenLobby" class="screen lobby hidden">
+      <div class="section-head">
         <h2>Игроки <span class="muted" id="lobbyCount"></span></h2>
-        <ul class="lobby-players" id="lobbyPlayers"></ul>
-        <button class="btn ghost hidden" id="joinBtn">Присоединиться</button>
-        <div class="bot-btns hidden" id="botBtns"></div>
+        <div class="head-actions">
+          <button class="link-btn hidden" id="shuffleBtn">🎲 Перемешать</button>
+          <button class="link-btn hidden" id="addBotBtn">+ Бот</button>
+        </div>
       </div>
-      <div class="card">
-        <h2>Правила <span class="preset-name" id="presetName"></span></h2>
-        <div class="chips" id="presetList"></div>
-        <div class="field-label">Бочка</div>
-        <div class="segmented" id="segBarrel">
-          <button data-v="none">Нет</button>
-          <button data-v="points">По очкам</button>
-          <button data-v="open">Открытая</button>
-          <button data-v="knock">Со сбросом</button>
-        </div>
-        <ul class="rules-summary" id="rulesSummary"></ul>
-        <div class="row-btns">
-          <button class="btn ghost small" id="editRulesBtn">⚙️ Настроить</button>
-          <button class="btn ghost small" id="shareRulesBtn">🔗 Поделиться</button>
-        </div>
-        <div class="field-label">Таймер на действие</div>
-        <div class="segmented" id="segTimer">
-          <button data-v="0">Выкл</button>
-          <button data-v="30">30 с</button>
-          <button data-v="60">60 с</button>
-          <button data-v="120">120 с</button>
-        </div>
-        <div class="field-label">Карта</div>
-        <div class="chips" id="mapList"></div>
-        <div class="field-label">Взнос в банк</div>
-        <div class="segmented" id="segStake">
-          <button data-v="0">Без ставок</button>
-          <button data-v="50">50 🪙</button>
-          <button data-v="100">100 🪙</button>
-          <button data-v="250">250 🪙</button>
-        </div>
-        <p class="setting-desc muted" id="stakeNote"></p>
-        <p class="setting-desc muted" id="ownerNote"></p>
+      <div class="card list" id="lobbyPlayers"></div>
+      <button class="btn secondary hidden" id="joinBtn">Присоединиться</button>
+
+      <div class="section-head"><h2>Партия</h2></div>
+      <div class="card list settings">
+        <button class="row" id="rowRules">
+          <span class="row-icon">📖</span><span class="row-label">Правила</span>
+          <span class="row-value" id="presetName"></span><span class="chev">›</span>
+        </button>
+        <button class="row" id="rowMap">
+          <span class="row-icon"><img class="map-thumb" id="mapThumb" alt=""></span><span class="row-label">Карта</span>
+          <span class="row-value" id="mapValue"></span><span class="chev">›</span>
+        </button>
+        <button class="row" id="rowTimer">
+          <span class="row-icon">⏱</span><span class="row-label">Таймер</span>
+          <span class="row-value" id="timerValue"></span><span class="chev">›</span>
+        </button>
+        <button class="row" id="rowStake">
+          <span class="row-icon">🪙</span><span class="row-label">Ставка</span>
+          <span class="row-value" id="stakeValue"></span><span class="chev">›</span>
+        </button>
+        <label class="row" id="rowTeams">
+          <span class="row-icon">👥</span><span class="row-label">Команды по двое</span>
+          <input type="checkbox" class="switch" id="teamsToggle">
+        </label>
       </div>
-      <div class="lobby-actions">
-        <button class="btn primary" id="startBtn">Начать игру</button>
-        <button class="btn ghost" id="leaveLobbyBtn">Выйти</button>
+      <p class="note" id="ownerNote"></p>
+
+      <div class="bottom-bar">
+        <button class="btn secondary" id="leaveLobbyBtn">Выйти</button>
+        <button class="btn primary grow" id="startBtn">Начать игру</button>
       </div>
     </section>
 
     <!-- игра -->
-    <section id="screenGame" class="screen hidden">
-      <div class="spec-banner hidden" id="specBanner">👀 Ты зритель — смотри и болей</div>
-      <div class="players" id="players"></div>
+    <section id="screenGame" class="screen game hidden">
+      <div class="spec-banner hidden" id="specBanner">👀 Ты зритель</div>
+      <div class="strip" id="players"></div>
 
       <div class="table-wrap" id="tableWrap">
         <div id="table3d"></div>
@@ -95,32 +87,26 @@
         <div class="fight-caption hidden" id="fightCaption"></div>
       </div>
 
-      <div class="turn-panel">
+      <div class="panel">
+        <div class="timer-bar hidden" id="timerBar"><div id="timerFill"></div></div>
         <div class="turn-head">
           <div class="turn-who" id="turnWho"></div>
           <div class="turn-points"><span class="label">в ходу</span><span id="turnPoints">0</span></div>
         </div>
-        <div class="kept-row" id="keptRow"></div>
+        <div class="turn-meta">
+          <div class="kept-row" id="keptRow"></div>
+          <span class="risk hidden" id="riskLine"></span>
+        </div>
         <div class="hint" id="hint"></div>
-        <div class="timer-bar hidden" id="timerBar"><div id="timerFill"></div></div>
         <div class="actions" id="actions">
           <button class="btn primary big" id="rollBtn">Бросить</button>
-          <button class="btn gold big" id="stopBtn">Записать</button>
+          <button class="btn ink big" id="stopBtn">Записать</button>
         </div>
-        <div class="risk hidden" id="riskLine"></div>
-      </div>
-
-      <div class="react-bar" id="reactBar"></div>
-      <div class="sticker-tray hidden" id="stickerTray"></div>
-
-      <details class="log">
-        <summary>Журнал <span class="muted" id="logLast"></span></summary>
-        <ul id="logList"></ul>
-      </details>
-
-      <div class="owner-tools" id="ownerTools">
-        <button class="btn tiny ghost" id="leaveGameBtn">Выйти из игры</button>
-        <button class="btn tiny ghost hidden" id="endBtn">Завершить игру</button>
+        <div class="toolbar">
+          <button class="tool" id="reactBtn">😀 <span>Реакции</span></button>
+          <button class="tool" id="logBtn">📜 <span>Журнал</span></button>
+          <button class="tool" id="moreBtn">⋯ <span>Ещё</span></button>
+        </div>
       </div>
     </section>
   </div>
@@ -128,30 +114,159 @@
   <!-- эффекты поверх всего -->
   <div class="fly-layer" id="flyLayer"></div>
   <div id="announce" class="announce hidden"></div>
-
-  <!-- большие объявления -->
   <div id="toast" class="toast hidden"><div class="toast-emoji" id="toastEmoji"></div><div class="toast-text" id="toastText"></div></div>
+
+  <!-- меню -->
+  <div id="menuModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <div class="list card flat">
+        <button class="row" data-menu="profile"><span class="row-icon">👤</span><span class="row-label">Мой профиль</span><span class="chev">›</span></button>
+        <button class="row" data-menu="skins"><span class="row-icon">🎨</span><span class="row-label">Мои кубики</span><span class="chev">›</span></button>
+        <button class="row" data-menu="ach"><span class="row-icon">🏅</span><span class="row-label">Ачивки</span><span class="chev">›</span></button>
+        <button class="row" data-menu="records"><span class="row-icon">🏛</span><span class="row-label">Рекорды чата</span><span class="chev">›</span></button>
+        <button class="row" data-menu="rules"><span class="row-icon">📖</span><span class="row-label">Правила</span><span class="chev">›</span></button>
+        <button class="row" data-menu="theme"><span class="row-icon">🌓</span><span class="row-label">Тема</span><span class="row-value" id="themeValue"></span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- лобби: правила -->
+  <div id="rulesSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <h2>Правила</h2>
+      <div class="chips" id="presetList"></div>
+      <div class="field-label">Бочка</div>
+      <div class="segmented" id="segBarrel">
+        <button data-v="none">Нет</button>
+        <button data-v="points">По очкам</button>
+        <button data-v="open">Открытая</button>
+        <button data-v="knock">Со сбросом</button>
+      </div>
+      <ul class="rules-summary" id="rulesSummary"></ul>
+      <div class="row-btns">
+        <button class="btn secondary" id="editRulesBtn">⚙️ Настроить</button>
+        <button class="btn secondary" id="shareRulesBtn">🔗 Поделиться</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- лобби: карта -->
+  <div id="mapSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <h2>Карта</h2>
+      <div class="map-grid" id="mapList"></div>
+    </div>
+  </div>
+
+  <!-- лобби: таймер -->
+  <div id="timerSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <h2>Таймер на действие</h2>
+      <div class="segmented" id="segTimer">
+        <button data-v="0">Выкл</button>
+        <button data-v="30">30 с</button>
+        <button data-v="60">60 с</button>
+        <button data-v="120">120 с</button>
+      </div>
+      <p class="note">Когда время выходит, очки записываются (если можно), иначе ход пропускается.</p>
+    </div>
+  </div>
+
+  <!-- лобби: ставка -->
+  <div id="stakeSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <h2>Взнос в банк</h2>
+      <div class="segmented" id="segStake">
+        <button data-v="0">Без ставок</button>
+        <button data-v="50">50</button>
+        <button data-v="100">100</button>
+        <button data-v="250">250</button>
+      </div>
+      <p class="note" id="stakeNote"></p>
+    </div>
+  </div>
+
+  <!-- лобби: боты -->
+  <div id="botSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <h2>Добавить бота</h2>
+      <div class="list card flat" id="botBtns"></div>
+      <p class="note">Боты бросают честно, в статистику не попадают. С ботами играем без ставок.</p>
+    </div>
+  </div>
+
+  <!-- игра: реакции, журнал, ещё -->
+  <div id="reactSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <div class="react-bar" id="reactBar"></div>
+      <div class="sticker-tray" id="stickerTray"></div>
+    </div>
+  </div>
+  <div id="logSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <h2>Журнал</h2>
+      <ul class="log-list" id="logList"></ul>
+    </div>
+  </div>
+  <div id="moreSheet" class="modal hidden">
+    <div class="modal-card">
+      <div class="grabber"></div>
+      <div class="list card flat">
+        <button class="row" id="leaveGameBtn"><span class="row-icon">🚪</span><span class="row-label">Выйти из игры</span></button>
+        <button class="row danger" id="endBtn"><span class="row-icon">⛔</span><span class="row-label">Завершить игру для всех</span></button>
+      </div>
+    </div>
+  </div>
 
   <!-- итоги -->
   <div id="finishModal" class="modal hidden">
-    <div class="modal-card">
-      <div class="trophy">🏆</div>
+    <div class="modal-card tall">
+      <div class="grabber"></div>
       <h2 id="finishTitle"></h2>
-      <ol class="ranking" id="ranking"></ol>
+      <div class="list card flat ranking" id="ranking"></div>
       <div class="finish-bank hidden" id="finishBank"></div>
-      <div class="summary-chart" id="summaryChart"></div>
+      <div class="field-label">Счёт по ходам</div>
+      <div class="chart-box" id="summaryChart"></div>
+      <div class="field-label" id="winprobLabel">Шансы на победу</div>
+      <div class="chart-box" id="winprobChart"></div>
       <ul class="highlights" id="finishHighlights"></ul>
       <div class="finish-ach" id="finishAch"></div>
-      <button class="btn primary" id="rematchBtn">Реванш</button>
-      <button class="btn ghost" id="closeFinishBtn">Посмотреть стол</button>
+      <div class="row-btns">
+        <button class="btn secondary" id="closeFinishBtn">К столу</button>
+        <button class="btn primary grow" id="rematchBtn">Реванш</button>
+      </div>
     </div>
+  </div>
+
+  <!-- профиль -->
+  <div id="profileModal" class="modal hidden">
+    <div class="modal-card tall" id="profileBody"></div>
+  </div>
+
+  <!-- рекорды чата -->
+  <div id="recordsModal" class="modal hidden">
+    <div class="modal-card tall" id="recordsBody"></div>
+  </div>
+
+  <!-- партия из истории -->
+  <div id="gameModal" class="modal hidden">
+    <div class="modal-card tall" id="gameBody"></div>
   </div>
 
   <!-- правила (просмотр) -->
   <div id="rulesModal" class="modal hidden">
-    <div class="modal-card rules">
+    <div class="modal-card tall rules">
+      <div class="grabber"></div>
       <h2>Правила «1000»</h2>
-      <p class="muted center" id="rulesPreset"></p>
+      <p class="note center" id="rulesPreset"></p>
       <div id="rulesBody"></div>
       <button class="btn primary" id="closeRulesBtn">Понятно</button>
     </div>
@@ -159,13 +274,13 @@
 
   <!-- редактор правил -->
   <div id="editModal" class="modal hidden">
-    <div class="modal-card editor">
+    <div class="modal-card tall editor">
       <h2>Настройка правил</h2>
-      <p class="muted center" id="editNote"></p>
+      <p class="note center" id="editNote"></p>
       <div id="rulesForm"></div>
-      <div class="editor-actions">
-        <button class="btn ghost" id="editCancelBtn">Отмена</button>
-        <button class="btn primary" id="editSaveBtn">Сохранить</button>
+      <div class="row-btns sticky-actions">
+        <button class="btn secondary" id="editCancelBtn">Отмена</button>
+        <button class="btn primary grow" id="editSaveBtn">Сохранить</button>
       </div>
     </div>
   </div>
@@ -173,34 +288,48 @@
   <!-- поделиться пресетом -->
   <div id="shareModal" class="modal hidden">
     <div class="modal-card">
+      <div class="grabber"></div>
       <h2>Поделиться правилами</h2>
-      <p class="muted center">Пресет сохранится у тебя, а по ссылке его сможет взять любой.</p>
+      <p class="note center">Пресет сохранится у тебя, а по ссылке его сможет взять любой.</p>
       <input class="input" id="shareName" maxlength="40" placeholder="Название, например «Дачные»">
       <button class="btn primary" id="shareSaveBtn">Сохранить и получить ссылку</button>
       <div class="share-result hidden" id="shareResult">
         <div class="share-code">Код: <b id="shareCode"></b></div>
         <div class="share-link" id="shareLink"></div>
-        <button class="btn gold" id="shareSendBtn">📤 Отправить в Telegram</button>
-        <button class="btn ghost" id="shareCopyBtn">Скопировать ссылку</button>
+        <button class="btn primary" id="shareSendBtn">📤 Отправить в Telegram</button>
+        <button class="btn secondary" id="shareCopyBtn">Скопировать ссылку</button>
       </div>
-      <button class="btn ghost" id="shareCloseBtn">Закрыть</button>
+      <button class="btn secondary" id="shareCloseBtn">Закрыть</button>
     </div>
   </div>
 
   <!-- ачивки -->
   <div id="achModal" class="modal hidden">
-    <div class="modal-card">
-      <h2>🏅 Ачивки <span class="muted" id="achCount"></span></h2>
+    <div class="modal-card tall">
+      <div class="grabber"></div>
+      <h2>Ачивки <span class="muted" id="achCount"></span></h2>
       <div class="ach-grid" id="achList"></div>
       <button class="btn primary" id="achCloseBtn">Закрыть</button>
     </div>
   </div>
 
+  <!-- мои кубики -->
+  <div id="skinModal" class="modal hidden">
+    <div class="modal-card tall">
+      <div class="grabber"></div>
+      <h2>Мои кубики</h2>
+      <p class="note center" id="chipsBalance"></p>
+      <div class="skin-grid" id="skinGrid"></div>
+      <button class="btn primary" id="skinCloseBtn">Готово</button>
+    </div>
+  </div>
+
   <!-- админ-панель -->
   <div id="adminModal" class="modal hidden">
-    <div class="modal-card admin">
-      <h2>🛠 Админ-панель</h2>
-      <div class="tabs" id="adminTabs">
+    <div class="modal-card tall admin">
+      <div class="grabber"></div>
+      <h2>Админ-панель</h2>
+      <div class="segmented tabs" id="adminTabs">
         <button data-tab="game" class="on">Игра</button>
         <button data-tab="rooms">Комнаты</button>
         <button data-tab="log">Лог</button>
@@ -208,109 +337,103 @@
       </div>
       <div class="tab" data-tab="game">
         <div class="row-btns">
-          <button class="btn small" id="admPauseBtn">⏸ Пауза</button>
-          <button class="btn small" id="admUndoBtn">↩️ Отменить ход</button>
+          <button class="btn secondary" id="admPauseBtn">⏸ Пауза</button>
+          <button class="btn secondary" id="admUndoBtn">↩️ Отменить ход</button>
         </div>
         <div class="row-btns">
-          <button class="btn small" id="admRulesBtn">⚙️ Правила</button>
-          <button class="btn small danger" id="admEndBtn">⛔ Завершить</button>
+          <button class="btn secondary" id="admRulesBtn">⚙️ Правила</button>
+          <button class="btn danger" id="admEndBtn">⛔ Завершить</button>
         </div>
         <div class="field-label">Следующий бросок (любого игрока)</div>
         <div class="force-row">
           <input class="input" id="admForce" placeholder="например 1 1 1 1 1" inputmode="numeric">
-          <button class="btn small gold" id="admForceBtn">Задать</button>
+          <button class="btn primary" id="admForceBtn">Задать</button>
         </div>
         <div class="chips" id="admForcePresets"></div>
         <div class="field-label">Игроки</div>
-        <div id="admPlayers"></div>
+        <div class="list card flat" id="admPlayers"></div>
       </div>
       <div class="tab hidden" data-tab="rooms">
-        <button class="btn small ghost" id="admRoomsRefresh">Обновить</button>
+        <button class="btn secondary" id="admRoomsRefresh">Обновить</button>
         <div id="admRooms"></div>
       </div>
       <div class="tab hidden" data-tab="log">
-        <button class="btn small ghost" id="admLogRefresh">Обновить</button>
+        <button class="btn secondary" id="admLogRefresh">Обновить</button>
         <ul class="audit" id="admLog"></ul>
       </div>
       <div class="tab hidden" data-tab="style">
-        <label class="toggle"><input type="checkbox" id="admGold"> Золотые кубики на моих бросках</label>
-        <label class="toggle"><input type="checkbox" id="admBadge"> Бейдж 👑 у имени</label>
+        <label class="row"><span class="row-label">Золотые кубики на моих бросках</span><input type="checkbox" class="switch" id="admGold"></label>
+        <label class="row"><span class="row-label">Бейдж 👑 у имени</span><input type="checkbox" class="switch" id="admBadge"></label>
         <div class="field-label">Объявление на стол</div>
         <div class="force-row">
           <input class="input" id="admAnnounce" maxlength="140" placeholder="Текст для всех">
-          <button class="btn small gold" id="admAnnounceBtn">📢</button>
+          <button class="btn primary" id="admAnnounceBtn">📢</button>
         </div>
       </div>
-      <button class="btn ghost" id="adminCloseBtn">Закрыть</button>
-    </div>
-  </div>
-
-  <!-- мои кубики -->
-  <div id="skinModal" class="modal hidden">
-    <div class="modal-card">
-      <h2>🎨 Мои кубики</h2>
-      <p class="muted center" id="chipsBalance"></p>
-      <div class="skin-grid" id="skinGrid"></div>
-      <button class="btn primary" id="skinCloseBtn">Готово</button>
+      <button class="btn secondary" id="adminCloseBtn">Закрыть</button>
     </div>
   </div>
 
   <!-- админ: действия с игроком -->
   <div id="playerModal" class="modal hidden">
-    <div class="modal-card admin">
+    <div class="modal-card tall admin">
+      <div class="grabber"></div>
       <h2 id="pmName"></h2>
       <div class="pm-rig" id="pmRig"></div>
       <div class="field-label">Следующий бросок: тап по кубику меняет значение (? — случайно)</div>
       <div class="pm-dice" id="pmDice"></div>
       <div class="row-btns">
-        <button class="btn small gold" id="pmExactBtn">🎯 Задать</button>
-        <button class="btn small ghost" id="pmUnrigBtn">Снять подкрутку</button>
+        <button class="btn primary" id="pmExactBtn">🎯 Задать</button>
+        <button class="btn secondary" id="pmUnrigBtn">Снять подкрутку</button>
       </div>
       <div class="chips" id="pmPresets"></div>
       <div class="field-label">Естественно (сервер сам подберёт кубики)</div>
       <div class="row-btns three">
-        <button class="btn small" data-rig="bolt">🔩 Болт</button>
-        <button class="btn small" data-rig="low">🙂 Мало</button>
-        <button class="btn small" data-rig="good">💰 Хорошо</button>
+        <button class="btn secondary" data-rig="bolt">🔩 Болт</button>
+        <button class="btn secondary" data-rig="low">🙂 Мало</button>
+        <button class="btn secondary" data-rig="good">💰 Хорошо</button>
       </div>
       <div class="field-label">Цель хода (держится, пока не выполнится или ход не кончится)</div>
       <div class="row-btns three">
-        <button class="btn small" data-rig="samosval">🚛 Самосвал</button>
-        <button class="btn small" data-rig="win">🏆 Победа</button>
-        <button class="btn small" data-rig="pit" id="pmPitBtn">🕳 Из ямы</button>
+        <button class="btn secondary" data-rig="samosval">🚛 Самосвал</button>
+        <button class="btn secondary" data-rig="win">🏆 Победа</button>
+        <button class="btn secondary" data-rig="pit" id="pmPitBtn">🕳 Из ямы</button>
       </div>
       <div class="field-label">Счёт</div>
       <div class="force-row">
         <input class="input" id="pmScore" type="number" step="5" inputmode="numeric">
-        <button class="btn small" id="pmScoreBtn">✓</button>
+        <button class="btn secondary" id="pmScoreBtn">✓</button>
       </div>
       <div class="row-btns three">
-        <button class="btn small" id="pmBoltBtn">🔩 Болт</button>
-        <button class="btn small" id="pmTruckBtn">🚛 Самосвал</button>
-        <button class="btn small danger" id="pmKickBtn">✕ Исключить</button>
+        <button class="btn secondary" id="pmBoltBtn">🔩 Болт</button>
+        <button class="btn secondary" id="pmTruckBtn">🚛 Самосвал</button>
+        <button class="btn danger" id="pmKickBtn">✕ Исключить</button>
       </div>
       <div class="pm-human" id="pmHuman">
         <div class="field-label">Фишки</div>
         <div class="force-row">
           <input class="input" id="pmChips" type="number" step="50" inputmode="numeric">
-          <button class="btn small" id="pmChipsBtn">✓</button>
+          <button class="btn secondary" id="pmChipsBtn">✓</button>
         </div>
         <div class="field-label">Личные скины</div>
         <div class="row-btns">
-          <button class="btn small" data-grant="pink">🌸 Розовые</button>
-          <button class="btn small" data-grant="gold">✨ Золотые</button>
+          <button class="btn secondary" data-grant="pink">🌸 Розовые</button>
+          <button class="btn secondary" data-grant="gold">✨ Золотые</button>
         </div>
         <div class="row-btns">
-          <button class="btn small ghost" data-revoke="pink">Забрать 🌸</button>
-          <button class="btn small ghost" data-revoke="gold">Забрать ✨</button>
+          <button class="btn secondary" data-revoke="pink">Забрать 🌸</button>
+          <button class="btn secondary" data-revoke="gold">Забрать ✨</button>
         </div>
       </div>
-      <button class="btn ghost" id="pmCloseBtn">Закрыть</button>
+      <div class="row-btns">
+        <button class="btn secondary" id="pmProfileBtn">👤 Профиль</button>
+        <button class="btn secondary" id="pmCloseBtn">Закрыть</button>
+      </div>
     </div>
   </div>
 
   <div id="errorToast" class="error-toast hidden"></div>
 
-  <script type="module" src="/static/app.js?v=6"></script>
+  <script type="module" src="/static/app.js?v=7"></script>
 </body>
 </html>

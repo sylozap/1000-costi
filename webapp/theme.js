@@ -2,7 +2,7 @@
 // По умолчанию — как в Telegram (или в системе); выбор игрока запоминается на устройстве.
 (function () {
   const tg = window.Telegram?.WebApp;
-  const BG = { dark: '#0d1712', light: '#f3efe4' };
+  const BG = { dark: '#0e0f12', light: '#f4f5f7' };
   const media = window.matchMedia?.('(prefers-color-scheme: light)');
   let saved = null;
   try { saved = localStorage.getItem('theme'); } catch (e) { /* без localStorage */ }

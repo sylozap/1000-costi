@@ -10,6 +10,7 @@ log = logging.getLogger(__name__)
 
 # критическое значение хи-квадрат для 5 степеней свободы при уровне значимости 0.05
 CHI2_5_DOF_05 = 11.07
+LUCK_MIN_ROLLS = 30  # меньше бросков — удачу не показываем
 
 
 class History:
@@ -162,7 +163,8 @@ def profile(history: History, uid: int, viewer: int | None = None) -> dict:
         "games": len(games), "wins": wins, "win_rate": _pct(wins, len(games)),
         "streak": streak, "best_streak": best_streak, "best_turn": best_turn,
         "samosvals": agg["samosvals"], "overtakes": agg["overtakes"],
-        "luck": _pct(agg["pts"], exp),  # 100 — как в среднем по теории вероятностей
+        # 100 — как в среднем по теории вероятностей; на малой выборке индекс бессмыслен
+        "luck": _pct(agg["pts"], exp) if agg["rolls"] >= LUCK_MIN_ROLLS else None,
         "avg_turn": round(agg["commit_pts"] / agg["commits"]) if agg["commits"] else None,
         "burned_rate": _pct(agg["burned"], agg["turns"]),
         "burned_pts": agg["burned_pts"],

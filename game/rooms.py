@@ -84,6 +84,7 @@ class Room:
         self.winprob: dict[str, float] = {}  # шансы на победу сейчас (uid → 0..1)
         self.winprob_hist: list[dict] = []  # шансы после каждого хода — для графика итогов
         self._wp_turn: int | None = None
+        self._wp_seq = 0
         self.updated = time.time()
 
     # ---------- состояние ----------
@@ -569,26 +570,32 @@ class Room:
 
     # ---------- шансы на победу ----------
 
-    def _schedule_winprob(self) -> None:
-        """В начале каждого хода считаем шансы в фоновом потоке (симуляция партии до конца)."""
+    def _schedule_winprob(self, force: bool = False) -> None:
+        """В начале каждого хода (и после правок админа) считаем шансы в фоновом потоке."""
         g = self.game
-        if not config.WINPROB_BUDGET or not g or g.phase != "play" or g.rolls_in_turn or g.turn_no == self._wp_turn:
+        if not config.WINPROB_BUDGET or not g or g.phase != "play":
+            return
+        if not force and (g.rolls_in_turn or g.turn_no == self._wp_turn):
             return
         self._wp_turn = turn = g.turn_no
+        self._wp_seq += 1
         base = sim_clone(g, random.Random())
         uids = [p.uid for p in g.players]
-        asyncio.create_task(self._winprob_task(g, turn, base, uids))
+        asyncio.create_task(self._winprob_task(g, turn, base, uids, self._wp_seq))
 
-    async def _winprob_task(self, g, turn: int, base, uids: list[int]) -> None:
+    async def _winprob_task(self, g, turn: int, base, uids: list[int], seq: int) -> None:
         try:
             probs = await asyncio.to_thread(chances_from_clone, base, uids, config.WINPROB_BUDGET)
         except Exception:  # noqa: BLE001 — аналитика не должна ронять игру
             log.exception("winprob failed in room %s", self.id)
             return
-        if self.game is not g or self.status != "game":
-            return
+        if self.game is not g or self.status != "game" or seq != self._wp_seq:
+            return  # партия кончилась или уже идёт более свежий расчёт
         self.winprob = probs
-        self.winprob_hist.append({"turn": turn, "p": probs})
+        if self.winprob_hist and self.winprob_hist[-1]["turn"] == turn:
+            self.winprob_hist[-1] = {"turn": turn, "p": probs}
+        else:
+            self.winprob_hist.append({"turn": turn, "p": probs})
         await self.broadcast()
 
     # ---------- фишки ----------
@@ -798,6 +805,7 @@ class Room:
         else:
             raise GameError("неизвестная команда")
         await self._after(events)
+        self._schedule_winprob(force=True)  # счёт поменялся вручную — шансы пересчитываем
 
     # ---------- таймер ----------
 
