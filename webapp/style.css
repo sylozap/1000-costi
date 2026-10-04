@@ -509,8 +509,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 4px; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 
-/* кнопка фона карты: выключена — приглушена */
-#ambientBtn.off { opacity: .4; filter: grayscale(1); }
 @media (max-width: 420px) {
   .topbar { gap: 5px; }
   .topbar .icon-btn { width: 30px; height: 30px; font-size: 14px; flex: none; }

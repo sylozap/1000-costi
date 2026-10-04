@@ -13,20 +13,14 @@ let ctx = null;
 let primed = false; // в контексте уже проигран беззвучный буфер (нужно iOS внутри жеста)
 let stale = false; // система не дала разбудить контекст — пересоздать при следующем касании
 let enabled = true;
-let ambOn = true; // фоновый звук карты (кнопка 🎵)
 let touched = false; // игрок сам переключил звук — облачное значение больше не применяем
-let ambTouched = false;
 const listeners = new Set();
 
 try { enabled = localStorage.getItem('sound') !== 'off'; } catch (e) { /* без localStorage */ }
-try { ambOn = localStorage.getItem('ambient') !== 'off'; } catch (e) { /* без localStorage */ }
 const cloud = tg?.isVersionAtLeast?.('6.9') ? tg.CloudStorage : null;
 try {
   cloud?.getItem('sound', (err, v) => {
     if (!err && !touched && (v === 'on' || v === 'off')) apply(v === 'on', false);
-  });
-  cloud?.getItem('ambient', (err, v) => {
-    if (!err && !ambTouched && (v === 'on' || v === 'off')) applyAmb(v === 'on', false);
   });
 } catch (e) { /* старый клиент Telegram */ }
 
@@ -40,24 +34,6 @@ function apply(v, persist) {
     try { cloud?.setItem('sound', v ? 'on' : 'off'); } catch (e) { /* старый клиент Telegram */ }
   }
   listeners.forEach((fn) => fn(v));
-  syncAmbient();
-}
-
-function applyAmb(v, persist) {
-  ambOn = v;
-  if (persist) {
-    try { localStorage.setItem('ambient', v ? 'on' : 'off'); } catch (e) { /* без localStorage */ }
-    try { cloud?.setItem('ambient', v ? 'on' : 'off'); } catch (e) { /* старый клиент Telegram */ }
-  }
-  listeners.forEach((fn) => fn(enabled));
-  syncAmbient();
-}
-
-export function isAmbientEnabled() { return ambOn; }
-export function setAmbientEnabled(v) {
-  ambTouched = true;
-  if (v) unlock();
-  applyAmb(!!v, true);
 }
 
 export function isEnabled() { return enabled; }
@@ -71,8 +47,6 @@ export function setEnabled(v) {
     play('pop'); // слышно сразу, что звук включился
   }
 }
-/** Какой фон играет сейчас (для отладки). */
-export function ambientId() { return amb ? amb.id : null; }
 /** Состояние для отладки: none | running | suspended | interrupted | closed. */
 export function state() { return ctx ? ctx.state : 'none'; }
 
@@ -87,7 +61,6 @@ export function unlock() {
     try { ctx = new AC(); } catch (e) { return; }
     primed = false;
     stale = false;
-    ctx.onstatechange = syncAmbient;
   }
   if (ctx.state !== 'running') ctx.resume?.().catch(() => {});
   if (!primed) {
@@ -97,7 +70,6 @@ export function unlock() {
     src.connect(ctx.destination);
     src.start(0);
   }
-  syncAmbient();
 }
 
 function wake() {
@@ -202,7 +174,6 @@ export function knock(strength = 1) {
 /** Шорох кубиков в руке перед броском */
 export function shake() {
   if (!ready()) return;
-  duck();
   const t = ctx.currentTime;
   for (let i = 0; i < 7; i++) {
     const src = ctx.createBufferSource();
@@ -336,195 +307,11 @@ function sleigh(t, gain, out = null) {
   }
 }
 
-// ---------- фон карты ----------
-// Каждая карта — тихая петля (шум/дрон через фильтры) плюс редкие случайные звуки.
-// Громкость фона ~в 3 раза ниже эффектов; на время броска фон приглушается.
+let surface = 'felt'; // поверхность карты для стука кубиков
 
-let surface = 'felt'; // поверхность для стука кубиков
-let ambId = null; // карта, фон которой должен играть
-let amb = null; // { id, ctx, master, level, nodes, timer }
-let noiseBuf = null;
-
-function loopNoise(brown = false) {
-  if (!noiseBuf || noiseBuf.sampleRate !== ctx.sampleRate || noiseBuf.ctx !== ctx) {
-    const len = ctx.sampleRate * 4;
-    const white = ctx.createBuffer(1, len, ctx.sampleRate);
-    const br = ctx.createBuffer(1, len, ctx.sampleRate);
-    const w = white.getChannelData(0), b = br.getChannelData(0);
-    let last = 0;
-    for (let i = 0; i < len; i++) {
-      w[i] = Math.random() * 2 - 1;
-      last = (last + 0.02 * w[i]) / 1.02;
-      b[i] = last * 3.5;
-    }
-    noiseBuf = { white, br, ctx, sampleRate: ctx.sampleRate };
-  }
-  const src = ctx.createBufferSource();
-  src.buffer = brown ? noiseBuf.br : noiseBuf.white;
-  src.loop = true;
-  return src;
-}
-
-/** Слой фона: шум через фильтр, громкость качается медленным LFO. */
-function layer(a, { brown = false, type = 'bandpass', freq = 500, q = 1, gain = 1, lfo = 0, depth = 0, sweep = 0 }) {
-  const src = loopNoise(brown);
-  const f = ctx.createBiquadFilter();
-  f.type = type;
-  f.frequency.value = freq;
-  f.Q.value = q;
-  const g = ctx.createGain();
-  g.gain.value = gain;
-  src.connect(f).connect(g).connect(a.master);
-  src.start();
-  a.nodes.push(src);
-  if (lfo) {
-    const o = ctx.createOscillator();
-    o.frequency.value = lfo;
-    const og = ctx.createGain();
-    og.gain.value = gain * depth;
-    o.connect(og).connect(g.gain);
-    o.start();
-    a.nodes.push(o);
-    if (sweep) {
-      const sg = ctx.createGain();
-      sg.gain.value = sweep;
-      o.connect(sg).connect(f.frequency);
-    }
-  }
-}
-
-function drone(a, freqs, gain, cutoff) {
-  const f = ctx.createBiquadFilter();
-  f.type = 'lowpass';
-  f.frequency.value = cutoff;
-  f.connect(a.master);
-  for (const [fr, type] of freqs) {
-    const o = ctx.createOscillator();
-    o.type = type;
-    o.frequency.value = fr;
-    const g = ctx.createGain();
-    g.gain.value = gain;
-    o.connect(g).connect(f);
-    o.start();
-    a.nodes.push(o);
-  }
-  const l = ctx.createOscillator();
-  l.frequency.value = 0.07;
-  const lg = ctx.createGain();
-  lg.gain.value = cutoff * 0.6;
-  l.connect(lg).connect(f.frequency);
-  l.start();
-  a.nodes.push(l);
-}
-
-// [уровень, построение петли, случайные звуки, интервал между ними (с)]
-const AMBIENT = {
-  felt: [0.06, (a) => layer(a, { brown: true, type: 'lowpass', freq: 260, q: 0.5 }), null],
-  octagon: [0.1, (a) => {
-    layer(a, { freq: 480, q: 0.7, lfo: 0.13, depth: 0.35 });
-    layer(a, { freq: 1200, q: 1, gain: 0.4, lfo: 0.21, depth: 0.5 });
-  }, (t, out) => {
-    if (Math.random() < 0.6) { // выкрик из зала
-      const f = 240 + Math.random() * 120;
-      tone(f, t, 0.3, { type: 'sawtooth', gain: 0.05, slide: -60, out });
-      noise(t, 0.25, { type: 'bandpass', freq: 900, q: 3, gain: 0.12, out });
-    } else { // свист
-      tone(2200, t, 0.18, { gain: 0.04, slide: 400, out });
-      tone(2600, t + 0.2, 0.3, { gain: 0.04, slide: -500, out });
-    }
-  }, [3, 8]],
-  ring: [0.08, (a) => layer(a, { freq: 420, q: 0.7, lfo: 0.1, depth: 0.3 }), (t, out) => {
-    if (Math.random() < 0.5) [0, 0.18].forEach((d) => tone(1900 + d * 600, t + d, 0.16, { gain: 0.04, out })); // тренер свистит
-    else for (let i = 0; i < 8; i++) noise(t + i * 0.09 + Math.random() * 0.04, 0.04, { type: 'bandpass', freq: 1500, q: 1, gain: 0.15, out }); // хлопки
-  }, [4, 9]],
-  bar: [0.09, (a) => {
-    layer(a, { freq: 320, q: 1.2, lfo: 4.3, depth: 0.5 });
-    layer(a, { freq: 750, q: 1.4, gain: 0.7, lfo: 5.7, depth: 0.6 });
-    layer(a, { freq: 1600, q: 1.6, gain: 0.35, lfo: 3.1, depth: 0.7 });
-  }, (t, out) => {
-    tone(2637 + Math.random() * 600, t, 0.4, { gain: 0.05, out });
-    if (Math.random() < 0.4) tone(3300, t + 0.08, 0.35, { gain: 0.04, out });
-  }, [2, 6]],
-  casino: [0.08, (a) => layer(a, { freq: 600, q: 0.8, lfo: 0.15, depth: 0.3 }), (t, out) => {
-    if (Math.random() < 0.6) {
-      const base = [523, 587, 659, 784, 880][Math.floor(Math.random() * 5)];
-      for (let i = 0; i < 5; i++) tone(base * (1 + i * 0.25), t + i * 0.07, 0.09, { type: 'square', gain: 0.025, out });
-    } else for (let i = 0; i < 5; i++) noise(t + i * 0.04, 0.04, { type: 'bandpass', freq: 2800, q: 4, gain: 0.15, out });
-  }, [3, 7]],
-  space: [0.1, (a) => drone(a, [[55, 'sine'], [55.6, 'sine'], [110, 'triangle'], [164.8, 'sine']], 0.25, 420), (t, out) => {
-    const f = 900 + Math.random() * 1200;
-    tone(f, t, 0.5, { gain: 0.03, slide: (Math.random() - 0.5) * 800, out });
-  }, [5, 11]],
-  beach: [0.13, (a) => {
-    layer(a, { type: 'lowpass', freq: 700, q: 0.5, lfo: 0.11, depth: 0.85 });
-    layer(a, { type: 'highpass', freq: 3500, q: 0.4, gain: 0.15, lfo: 0.11, depth: 0.9 });
-  }, (t, out) => seagull(t, 0.05, out), [6, 13]],
-  snow: [0.1, (a) => {
-    layer(a, { freq: 650, q: 1.6, lfo: 0.08, depth: 0.6, sweep: 380 });
-    layer(a, { type: 'highpass', freq: 2500, q: 0.5, gain: 0.12, lfo: 0.13, depth: 0.7 });
-  }, (t, out) => sleigh(t, 0.03, out), [8, 15]],
-};
-
-function stopAmbient() {
-  if (!amb) return;
-  const a = amb;
-  amb = null;
-  clearTimeout(a.timer);
-  try {
-    const t = a.ctx.currentTime;
-    a.master.gain.cancelScheduledValues(t);
-    a.master.gain.setTargetAtTime(0.0001, t, 0.15);
-  } catch (e) { /* контекст уже закрыт */ }
-  setTimeout(() => {
-    for (const n of a.nodes) try { n.stop(); } catch (e) { /* уже остановлен */ }
-    try { a.master.disconnect(); } catch (e) { /* уже отключён */ }
-  }, 700);
-}
-
-function startAmbient(id) {
-  const def = AMBIENT[id];
-  if (!def) return;
-  const [level, build, event, gap] = def;
-  const master = ctx.createGain();
-  master.gain.value = 0.0001;
-  master.connect(ctx.destination);
-  const a = { id, ctx, master, level, nodes: [], timer: null };
-  build(a);
-  master.gain.setTargetAtTime(level, ctx.currentTime, 0.6);
-  if (event) {
-    const next = () => {
-      a.timer = setTimeout(() => {
-        if (amb !== a) return;
-        if (ctx === a.ctx && ctx.state === 'running') event(ctx.currentTime, master);
-        next();
-      }, (gap[0] + Math.random() * (gap[1] - gap[0])) * 1000);
-    };
-    next();
-  }
-  amb = a;
-}
-
-function syncAmbient() {
-  const want = enabled && ambOn && ambId && ctx && ctx.state === 'running' ? ambId : null;
-  if (amb && amb.id === want && amb.ctx === ctx) return;
-  stopAmbient();
-  if (want) startAmbient(want);
-}
-
-/** Приглушить фон на время броска, чтобы стук кубиков был слышен чётко. */
-function duck() {
-  if (!amb || amb.ctx !== ctx) return;
-  const g = amb.master.gain, t = ctx.currentTime;
-  g.cancelScheduledValues(t);
-  g.setTargetAtTime(amb.level * 0.35, t, 0.05);
-  g.setTargetAtTime(amb.level, t + 1.4, 0.5);
-}
-
-/** Карта для фона и стука кубиков; null — тишина (экран без игры). */
-export function setAmbient(id) {
+/** Карта, по которой катятся кубики: от неё зависит звук стука. */
+export function setSurface(id) {
   surface = id || 'felt';
-  ambId = id;
-  syncAmbient();
 }
 
 /** Шум с фильтром: толпа, лязг, шорох. */

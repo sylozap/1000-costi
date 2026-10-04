@@ -54,7 +54,7 @@ if (tg) {
   tg.disableVerticalSwipes?.();
 }
 
-// Звуки карт: событие → звук (sound.js). Фон и стук кубиков о поверхность — в sound.js по id карты.
+// Звуки карт: событие → звук (sound.js). Стук кубиков о поверхность — в sound.js по id карты.
 const MAP_SFX = {
   felt: { preview: 'commit' },
   octagon: { preview: 'gong', start: 'gong', turn: 'gong', big: 'crowd', bolt: 'boo', wall: 'rattle', samosval: 'crowd', win: 'crowd' },
@@ -539,7 +539,6 @@ function showScreen(id) {
 }
 
 function showMessage(title, text) {
-  snd.setAmbient(null);
   $('msgTitle').textContent = title;
   $('msgText').textContent = text;
   showScreen('screenMsg');
@@ -590,7 +589,7 @@ function render(s) {
   // смена карты в лобби — все слышат её фирменный звук
   if (prevMap !== null && prevMap !== map && s.status === 'lobby') mapSfx('preview');
   prevMap = map;
-  snd.setAmbient(s.status === 'cancelled' ? null : map);
+  snd.setSurface(map);
   if (s.status === 'cancelled') {
     showMessage('Игра отменена', 'Создай новую командой /newgame в группе.');
     return;
@@ -1635,20 +1634,8 @@ onTap('admAnnounceBtn', () => {
   $('admAnnounce').value = '';
 });
 
-function syncSoundBtn() {
-  $('soundBtn').textContent = snd.isEnabled() ? '🔊' : '🔇';
-  const amb = $('ambientBtn');
-  amb.classList.toggle('off', !snd.isAmbientEnabled() || !snd.isEnabled());
-  amb.setAttribute('aria-pressed', String(snd.isAmbientEnabled()));
-}
+function syncSoundBtn() { $('soundBtn').textContent = snd.isEnabled() ? '🔊' : '🔇'; }
 onTap('soundBtn', () => snd.setEnabled(!snd.isEnabled()));
-onTap('ambientBtn', () => {
-  if (!snd.isEnabled()) {
-    snd.setEnabled(true);
-    snd.setAmbientEnabled(true);
-  } else snd.setAmbientEnabled(!snd.isAmbientEnabled());
-  showInfo(snd.isAmbientEnabled() ? '🎵 Фон карты включён' : '🎵 Фон карты выключен');
-});
 snd.onChange(syncSoundBtn);
 syncSoundBtn();
 function syncThemeBtn() { $('themeBtn').textContent = window.appTheme?.get() === 'light' ? '🌙' : '☀️'; }
