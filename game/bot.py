@@ -32,6 +32,8 @@ def rules_html(rules: dict, title: str = "🎲 Игра «1000» — прави�
 
 
 def mention(uid: int, name: str) -> str:
+    if uid < 0:  # бот-соперник — не аккаунт Telegram
+        return escape(name)
     return f'<a href="tg://user?id={uid}">{escape(name)}</a>'
 
 
@@ -145,15 +147,16 @@ class GroupNotifier:
         await self.bot.send_message(room.chat_id, "🎲 Игра «1000» отменена.")
 
 
-def format_stats_rows(rows: list[dict]) -> str:
+def format_stats_rows(rows: list[dict], chips: dict[int, int] | None = None) -> str:
     lines = []
     for i, r in enumerate(rows):
+        bal = f" · 🪙 {chips[r['uid']]}" if chips and r.get("uid") in chips else ""
         games = r["games"]
         rate = f"{round(100 * r['wins'] / games)}%" if games else "—"
         mark = "" if games >= RATING_MIN_GAMES else " (мало игр для рейтинга)"
         lines.append(f"{i + 1}. <b>{escape(r.get('name', '?'))}</b> — {rate} побед ({r['wins']} из {games}){mark}\n"
                      f"    🚛 {r['samosvals']} · 🔩 {r['bolt_penalties']} · 🛢💥 {r['barrel_falls']} · "
-                     f"🏎 {r['overtakes']} · лучший ход {r['best_turn']}")
+                     f"🏎 {r['overtakes']} · лучший ход {r['best_turn']}{bal}")
     return "\n".join(lines)
 
 
@@ -211,9 +214,10 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier, pr
         if not rows:
             await message.reply("Ещё не сыграно ни одной партии. /newgame")
             return
+        chips = {r["uid"]: manager.profiles.chips(r["uid"]) for r in rows}
         await message.reply(f"📊 <b>Рейтинг чата</b> — по проценту побед (от {RATING_MIN_GAMES} партий)\n"
-                            "🚛 самосвалы · 🔩 штрафы за болты · 🛢💥 падения с бочки · 🏎 обгоны\n\n"
-                            + format_stats_rows(rows))
+                            "🚛 самосвалы · 🔩 штрафы за болты · 🛢💥 падения с бочки · 🏎 обгоны · 🪙 фишки\n\n"
+                            + format_stats_rows(rows, chips))
 
     @router.message(Command("stats"), F.chat.type == ChatType.PRIVATE)
     async def stats_private(message: Message):
@@ -221,7 +225,9 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier, pr
         if not row:
             await message.answer("У тебя пока нет сыгранных партий.")
             return
-        await message.answer("📊 <b>Твоя статистика (все чаты)</b>\n\n" + format_stats_rows([row]))
+        uid = message.from_user.id
+        await message.answer("📊 <b>Твоя статистика (все чаты)</b>\n\n"
+                             + format_stats_rows([dict(row, uid=uid)], {uid: manager.profiles.chips(uid)}))
 
     @router.message(Command("rules"))
     async def rules(message: Message):

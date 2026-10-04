@@ -206,3 +206,110 @@ def test_old_stats_format_migrates(tmp_path):
     st = Stats(p)
     rows = st.chat_table(-1)
     assert rows[0]["uid"] == 5 and rows[0]["rated"] and round(rows[0]["rate"], 2) == 0.67
+
+
+# ---------- скины, карты, фишки, боты ----------
+
+def test_skins_and_map(tmp_path):
+    async def go():
+        m, room = setup(tmp_path)
+        w1, w2 = FakeWs(), FakeWs()
+        await room.attach(w1, 1, "Вася")
+        await room.attach(w2, 6582586667, "Катя")
+        st = room.state()
+        assert st["cosmetics"]["skins"]["6582586667"] == "pink"  # розовые выданы по умолчанию
+        assert st["cosmetics"]["skins"]["1"] == "ivory"
+        with pytest.raises(GameError):
+            await room.handle(1, "Вася", {"type": "skin", "id": "pink"}, w1)  # личный скин чужой
+        await room.handle(1, "Вася", {"type": "skin", "id": "neon"}, w1)
+        assert w1.last("profile")["skin"] == "neon"
+        assert room.state()["cosmetics"]["skins"]["1"] == "neon"
+        await room.handle(1, "Вася", {"type": "settings", "map": "octagon"}, w1)
+        assert room.state()["settings"]["map"] == "octagon"
+        with pytest.raises(GameError):
+            await room.handle(1, "Вася", {"type": "settings", "map": "moon"}, w1)
+        # админ выдаёт личный скин
+        wa = FakeWs()
+        await room.attach(wa, ADMIN, "Админ", spectate=True)
+        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "grant_skin", "uid": 1, "skin": "pink"}, wa)
+        assert room.state()["cosmetics"]["skins"]["1"] == "pink"
+        # сохраняется между перезапусками
+        assert RoomManager(None, None, data_dir=tmp_path).profiles.skin(1) == "pink"
+    run(go())
+
+
+def test_stakes_pay_winner_and_refund(tmp_path):
+    async def go():
+        m, room = setup(tmp_path)
+        w1, w2 = FakeWs(), FakeWs()
+        await room.attach(w1, 1, "Вася")
+        await room.attach(w2, 2, "Петя")
+        await room.handle(1, "Вася", {"type": "settings", "stake": 100}, w1)
+        await room.handle(1, "Вася", {"type": "start"}, w1)
+        assert room.state()["chips"] == {"1": 900, "2": 900} and room.state()["bank"] == 200
+        room.game.force_next([6, 6, 6, 6, 6])
+        await room.handle(1, "Вася", {"type": "order_roll"}, w1)
+        room.game.force_next([1, 1, 2, 2, 3])
+        await room.handle(2, "Петя", {"type": "order_roll"}, w2)
+        room.game.force_next([1, 1, 1, 1, 1])  # пять единиц — победа
+        await room.handle(1, "Вася", {"type": "roll"}, w1)
+        assert room.status == "finished"
+        assert m.profiles.chips(1) == 1100 and m.profiles.chips(2) == 900
+        assert w2.last("bank")["amount"] == 200
+
+        # реванш с отменой — взносы возвращаются
+        await room.handle(1, "Вася", {"type": "rematch"}, w1)
+        await room.handle(1, "Вася", {"type": "start"}, w1)
+        assert m.profiles.chips(2) == 800
+        await room.handle(1, "Вася", {"type": "end"}, w1)
+        assert m.profiles.chips(1) == 1100 and m.profiles.chips(2) == 900
+    run(go())
+
+
+def test_stake_not_enough_chips_and_daily_bonus(tmp_path):
+    async def go():
+        m, room = setup(tmp_path)
+        w1, w2 = FakeWs(), FakeWs()
+        await room.attach(w1, 1, "Вася")
+        await room.attach(w2, 2, "Петя")
+        m.profiles.set_chips(2, 30)
+        m.profiles.data["users"]["2"]["bonus_day"] = __import__("time").strftime("%Y-%m-%d")
+        await room.handle(1, "Вася", {"type": "settings", "stake": 50}, w1)
+        with pytest.raises(GameError, match="не хватает"):
+            await room.handle(1, "Вася", {"type": "start"}, w1)
+        assert room.status == "lobby" and m.profiles.chips(1) == 1000
+        m.profiles.data["users"]["2"]["bonus_day"] = "2000-01-01"
+        assert m.profiles.chips(2) == 130  # ежедневный бонус при малом балансе
+        assert m.profiles.chips(2) == 130  # только раз в сутки
+    run(go())
+
+
+def test_bots_play_full_game(tmp_path, monkeypatch):
+    from game import rooms as roomsmod
+    monkeypatch.setattr(roomsmod, "BOT_DELAY", (0.0, 0.0))
+
+    async def go():
+        m, room = setup(tmp_path)
+        w1 = FakeWs()
+        await room.attach(w1, 1, "Вася")
+        await room.handle(1, "Вася", {"type": "settings", "stake": 50}, w1)
+        for style in ("careful", "risky"):
+            await room.handle(1, "Вася", {"type": "add_bot", "style": style}, w1)
+        assert room.stake == 0 and len(room.members) == 3
+        with pytest.raises(GameError):
+            await room.handle(1, "Вася", {"type": "settings", "stake": 50}, w1)
+        await room.handle(1, "Вася", {"type": "start"}, w1)
+        g = room.game
+        for _ in range(5000):
+            if room.status != "game":
+                break
+            if g.phase == "order" and g.order_pending(g.player(1)):
+                await room.handle(1, "Вася", {"type": "order_roll"}, w1)
+            elif g.phase == "play" and g.cur.uid == 1:
+                action = "stop" if g.can_stop() and g.turn_points >= 100 else "roll"
+                await room.handle(1, "Вася", {"type": action}, w1)
+            await asyncio.sleep(0.001)
+        assert room.status == "finished"
+        rows = m.stats.chat_table(-1)
+        assert [r["uid"] for r in rows] == [1]  # боты в статистику не попадают
+    run(go())
