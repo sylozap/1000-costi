@@ -38,6 +38,7 @@ const prevScores = new Map();
 let myPresets = [];
 let finishAch = [];
 let finishBank = null;
+let prevMap = null;
 let pmUid = null; // игрок, открытый в админском окне
 let pmDice = [0, 0, 0, 0, 0];
 // категориальная палитра графика итогов (dataviz: порядок фиксирован, отдельно для тёмной и светлой темы)
@@ -53,17 +54,33 @@ if (tg) {
   tg.disableVerticalSwipes?.();
 }
 
-/** Звуковая тема арены по текущей карте. */
-function arena() {
-  return { octagon: 'fight', ring: 'box', bar: 'bar', casino: 'casino' }[state?.settings?.map] || null;
+// Звуки карт: событие → звук (sound.js). Фон и стук кубиков о поверхность — в sound.js по id карты.
+const MAP_SFX = {
+  felt: { preview: 'commit' },
+  octagon: { preview: 'gong', start: 'gong', turn: 'gong', big: 'crowd', bolt: 'boo', wall: 'rattle', samosval: 'crowd', win: 'crowd' },
+  ring: { preview: 'bell', start: 'bell', turn: 'bell', big: 'crowd', bolt: 'count', wall: 'rope', samosval: 'crowd', win: 'crowd' },
+  bar: { preview: 'cheers', commit: 'cheers', big: 'clink', samosval: 'glassBreak', win: 'hooray' },
+  casino: { preview: 'jackpot', commit: 'chips', big: 'jackpot', wall: 'rubber', win: 'jackpot' },
+  space: { preview: 'whoosh', throw: 'whoosh', commit: 'laser', zero: 'powerDown', samosval: 'powerDown', win: 'warp' },
+  beach: { preview: 'seagull', zero: 'waveWash', big: 'seagull', win: 'seagull' },
+  snow: { preview: 'sleigh', commit: 'sleigh', zero: 'creak', win: 'sleigh' },
+};
+const mapId = () => state?.settings?.map || 'felt';
+const isFightMap = () => mapId() === 'octagon' || mapId() === 'ring';
+/** Звук карты для события; true — у карты есть свой звук. */
+function mapSfx(kind) {
+  const name = MAP_SFX[mapId()]?.[kind];
+  if (name) snd.play(name);
+  return !!name;
 }
 
 const table = new DiceTable($('table3d'), {
-  onThrow: () => snd.shake(),
+  onThrow: () => {
+    snd.shake();
+    mapSfx('throw');
+  },
   onWall: (i) => {
-    if (i > 1) return;
-    const a = arena();
-    snd.play(a === 'fight' ? 'rattle' : a === 'box' ? 'rope' : 'chips');
+    if (i < 2) mapSfx('wall');
   },
   onImpact: (strength, i) => {
     if (strength > 0.3 || i % 2 === 0) snd.knock(strength);
@@ -294,11 +311,12 @@ async function processEvents(s) {
     if (seen.has(e.id)) continue;
     seen.add(e.id);
     const mine = e.uid === me;
-    const fight = arena() === 'fight' || arena() === 'box';
+    const fight = isFightMap();
     switch (e.kind) {
       case 'roll':
         snd.play(g.last_roll?.points ? 'score' : 'zero');
-        if (fight && g.last_roll?.points >= 100) snd.play('crowd');
+        if (g.last_roll?.points >= 100) mapSfx('big');
+        if (!g.last_roll?.points) mapSfx('zero');
         if (mine && !g.last_roll?.points) snd.haptic.notify('error');
         break;
       case 'hot':
@@ -312,8 +330,7 @@ async function processEvents(s) {
       case 'commit':
       case 'debt':
         snd.play('commit');
-        if (e.kind === 'commit' && arena() === 'bar') snd.play('clink');
-        if (e.kind === 'commit' && arena() === 'casino') snd.play('chips');
+        if (e.kind === 'commit') mapSfx('commit');
         if (mine) snd.haptic.notify('success');
         break;
       case 'limit':
@@ -321,7 +338,7 @@ async function processEvents(s) {
         break;
       case 'bolt':
         snd.play('bolt');
-        if (fight) snd.play('boo');
+        mapSfx('bolt');
         flashChip(e.uid);
         if (mine) snd.haptic.notify('warning');
         break;
@@ -334,10 +351,8 @@ async function processEvents(s) {
         break;
       case 'samosval':
         snd.play('samosval');
-        if (fight) {
-          caption('KO!', 'ko');
-          snd.play('crowd');
-        }
+        mapSfx('samosval');
+        if (fight) caption('KO!', 'ko');
         fxTruck();
         flashChip(e.uid);
         toast('🚛', `Самосвал! ${nameOf(s, e.uid)} → 0`, 2200);
@@ -404,20 +419,18 @@ async function processEvents(s) {
         break;
       case 'order_done':
         toast('🎲', 'Очерёдность определена!');
-        if (fight) {
-          caption('FIGHT!');
-          snd.play(arena() === 'fight' ? 'gong' : 'bell');
-        }
+        mapSfx('start');
+        if (fight) caption('FIGHT!');
         break;
       case 'timeout':
         showError(e.text);
         break;
       case 'win':
         snd.play('win');
+        mapSfx('win');
         if (fight) {
           const others = g.players.filter((p) => p.uid !== e.uid);
           caption(others.length && others.every((p) => p.score < 300) ? 'FLAWLESS VICTORY' : 'WINNER!', 'win');
-          snd.play('crowd');
         }
         snd.haptic.notify('success');
         break;
@@ -526,6 +539,7 @@ function showScreen(id) {
 }
 
 function showMessage(title, text) {
+  snd.setAmbient(null);
   $('msgTitle').textContent = title;
   $('msgText').textContent = text;
   showScreen('screenMsg');
@@ -571,7 +585,12 @@ function render(s) {
   const spect = s.spectators ? ` · 👀 ${s.spectators}` : '';
   const bank = s.bank ? ` · 🏦 ${s.bank}` : '';
   $('modeChip').textContent = `${s.preset} · ${s.rules_title}` + (s.settings.timer ? ` · ⏱${s.settings.timer}с` : '') + bank + spect;
-  table.setMap(s.settings.map || 'felt');
+  const map = s.settings.map || 'felt';
+  table.setMap(map);
+  // смена карты в лобби — все слышат её фирменный звук
+  if (prevMap !== null && prevMap !== map && s.status === 'lobby') mapSfx('preview');
+  prevMap = map;
+  snd.setAmbient(s.status === 'cancelled' ? null : map);
   if (s.status === 'cancelled') {
     showMessage('Игра отменена', 'Создай новую командой /newgame в группе.');
     return;
@@ -840,10 +859,7 @@ function renderGame(s) {
   if (g.current_uid !== prevCurrent) {
     const was = prevCurrent;
     prevCurrent = g.current_uid;
-    if (was !== null && g.phase === 'play') {
-      if (arena() === 'fight') snd.play('gong');
-      if (arena() === 'box') snd.play('bell');
-    }
+    if (was !== null && g.phase === 'play') mapSfx('turn');
     if (g.current_uid === me && g.phase === 'play') {
       snd.play('turn');
       snd.haptic.notify('success');
@@ -1619,8 +1635,20 @@ onTap('admAnnounceBtn', () => {
   $('admAnnounce').value = '';
 });
 
-function syncSoundBtn() { $('soundBtn').textContent = snd.isEnabled() ? '🔊' : '🔇'; }
+function syncSoundBtn() {
+  $('soundBtn').textContent = snd.isEnabled() ? '🔊' : '🔇';
+  const amb = $('ambientBtn');
+  amb.classList.toggle('off', !snd.isAmbientEnabled() || !snd.isEnabled());
+  amb.setAttribute('aria-pressed', String(snd.isAmbientEnabled()));
+}
 onTap('soundBtn', () => snd.setEnabled(!snd.isEnabled()));
+onTap('ambientBtn', () => {
+  if (!snd.isEnabled()) {
+    snd.setEnabled(true);
+    snd.setAmbientEnabled(true);
+  } else snd.setAmbientEnabled(!snd.isAmbientEnabled());
+  showInfo(snd.isAmbientEnabled() ? '🎵 Фон карты включён' : '🎵 Фон карты выключен');
+});
 snd.onChange(syncSoundBtn);
 syncSoundBtn();
 function syncThemeBtn() { $('themeBtn').textContent = window.appTheme?.get() === 'light' ? '🌙' : '☀️'; }
