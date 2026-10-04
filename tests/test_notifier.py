@@ -1,7 +1,6 @@
 import asyncio
 from types import SimpleNamespace
 
-from game import bot as botmod
 from game.bot import GroupNotifier
 from game.rooms import RoomManager
 from game.stats import Stats
@@ -32,9 +31,7 @@ class FakeWs:
         self.out.append(s)
 
 
-def test_full_flow(tmp_path, monkeypatch):
-    monkeypatch.setattr(botmod, "FLUSH_DELAY", 0.01)
-
+def test_full_flow(tmp_path):
     async def run():
         fb = FakeBot()
         stats = Stats(tmp_path / "stats.json")
@@ -59,9 +56,9 @@ def test_full_flow(tmp_path, monkeypatch):
             await asyncio.sleep(0.03 if g.phase == "play" and g.cur.uid != uid else 0)
         await asyncio.sleep(0.05)
         assert room.status == "finished"
-        assert any("Победа" in t for t in fb.sent)
-        assert any("Ходит" in t for t in fb.sent)
-        assert fb.deleted, "сообщения «ходит X» без событий должны удаляться"
+        # в группу только лобби/старт (правкой одного сообщения) и итог — без сообщений по ходу партии
+        assert len(fb.sent) == 2 and "Победа" in fb.sent[-1]
+        assert not any("Ходит" in t for t in fb.sent)
         rows = stats.chat_table(-5)
         assert sum(r["wins"] for r in rows) == 1 and all(r["games"] == 1 for r in rows)
 

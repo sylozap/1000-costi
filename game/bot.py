@@ -22,8 +22,6 @@ from .stats import RATING_MIN_GAMES, Presets, Stats
 
 log = logging.getLogger(__name__)
 
-FLUSH_DELAY = 3.0  # сек: события копятся и уходят одним сообщением
-
 
 def rules_html(rules: dict, title: str = "🎲 Игра «1000» — правила") -> str:
     parts = [f"<b>{escape(title)}</b>", "", "5 кубиков. Цель — набрать 1000 очков."]
@@ -41,10 +39,8 @@ class GroupNotifier:
     def __init__(self, bot: Bot, username: str):
         self.bot = bot
         self.username = username
-        self._buffers: dict[str, list[str]] = {}
-        self._flush_tasks: dict[str, asyncio.Task] = {}
+        self._buffers: dict[str, list[str]] = {}  # ачивки партии — уходят в итоговом сообщении
         self._lobby_tasks: dict[str, asyncio.Task] = {}
-        self._turn_msg: dict[str, int] = {}  # сообщение «ходит X» без событий — удаляем при следующем
 
     # ---------- ссылки ----------
 
@@ -108,75 +104,37 @@ class GroupNotifier:
     # ---------- события партии ----------
 
     async def game_events(self, room: Room, events: list[dict]) -> None:
-        lines = [escape(e["text"]) for e in events if e.get("notable")]
+        """Во время партии в группу ничего не пишем — только копим ачивки для итогового сообщения."""
+        lines = [escape(e["text"]) for e in events if e.get("kind") == "achievement"]
         if lines:
             self._buffers.setdefault(room.id, []).extend(lines)
-        turn_changed = any(e["kind"] in ("commit", "bolt", "bolt_penalty", "zero", "barrel_attempt",
-                                         "barrel_fall", "barrel_zero", "dot", "dot_penalty", "dot_zero",
-                                         "timeout", "order_done", "leave") for e in events)
-        if not (lines or turn_changed):
-            return
-        task = self._flush_tasks.get(room.id)
-        if task and not task.done():
-            return
-        self._flush_tasks[room.id] = asyncio.create_task(self._flush_later(room))
-
-    async def _flush_later(self, room: Room) -> None:
-        await asyncio.sleep(FLUSH_DELAY)
-        await self._flush(room)
-
-    async def _flush(self, room: Room, final: bool = False) -> None:
-        lines = self._buffers.pop(room.id, [])
-        g = room.game
-        turn_line = ""
-        if not final and room.status == "game" and g:
-            if g.phase == "play":
-                p = g.cur
-                turn_line = f"🎲 Ходит {mention(p.uid, p.name)} ({p.score})"
-            elif g.phase == "order":
-                waiting = ", ".join(mention(p.uid, p.name) for p in g.players if g.order_pending(p))
-                turn_line = f"🎲 Бросают за очерёдность: {waiting}"
-        if not lines and not turn_line:
-            return
-        prev = self._turn_msg.pop(room.id, None)
-        if prev:
-            try:
-                await self.bot.delete_message(room.chat_id, prev)
-            except Exception:  # noqa: BLE001
-                pass
-        text = "\n".join(lines + ([""] if lines and turn_line else []) + ([turn_line] if turn_line else []))
-        markup = self.keyboard(room, "🎲 Открыть игру") if turn_line else None
-        msg = await self.bot.send_message(room.chat_id, text, reply_markup=markup)
-        if not lines:
-            self._turn_msg[room.id] = msg.message_id
 
     async def game_over(self, room: Room) -> None:
-        task = self._flush_tasks.pop(room.id, None)
-        if task:
-            task.cancel()
-        await self._flush(room, final=True)
+        achievements = self._buffers.pop(room.id, [])
         g = room.game
         if not g:
             return
         medals = ["🥇", "🥈", "🥉"]
-        ranked = sorted(g.players, key=lambda p: (p.uid != g.winner, -p.score))
+        summary = g.summary()
         rows = []
-        for i, p in enumerate(ranked):
+        for i, r in enumerate(summary["rows"]):
             badge = medals[i] if i < 3 else f"{i + 1}."
-            rows.append(f"{badge} {escape(p.name)} — {p.score}")
+            rows.append(f"{badge} {escape(r['name'])} — {r['score']}")
         if g.winner is not None:
             w = next(p for p in g.players if p.uid == g.winner)
             head = f"🏆 <b>Победа: {mention(w.uid, w.name)}!</b>"
         else:
             head = "Игра окончена."
-        await self.bot.send_message(room.chat_id, head + "\n\n" + "\n".join(rows) +
-                                    "\n\nСтатистика: /stats · Новая игра: /newgame (или «Реванш» в приложении)")
+        parts = [head, "", "\n".join(rows)]
+        if summary["highlights"]:
+            parts += ["", "\n".join(escape(h) for h in summary["highlights"])]
+        if achievements:
+            parts += ["", "\n".join(achievements)]
+        parts += ["", "Статистика: /stats · Новая игра: /newgame (или «Реванш» в приложении)"]
+        await self.bot.send_message(room.chat_id, "\n".join(parts))
 
     async def cancelled(self, room: Room) -> None:
         self._buffers.pop(room.id, None)
-        task = self._flush_tasks.pop(room.id, None)
-        if task:
-            task.cancel()
         if room.lobby_msg_id:
             try:
                 await self.bot.edit_message_text("🎲 Игра «1000» отменена.", chat_id=room.chat_id,

@@ -60,6 +60,7 @@ class Game:
         self.last_roll: dict | None = None
         self.forced: list[int] | None = None  # значения следующего броска (админ)
         self.log: list[dict] = []
+        self.history: list[dict] = []  # счёт всех игроков после каждого хода — для графика итогов
         self._ev_seq = 0
         self._new_events: list[dict] = []
         self._reset_turn()
@@ -242,6 +243,7 @@ class Game:
         self.phase = "play"
         self.current = 0
         self._reset_turn()
+        self._record()
         names = ", ".join(f"{i + 1}. {p.name}" for i, p in enumerate(self.players))
         self._ev("order_done", f"Порядок ходов: {names}")
 
@@ -522,10 +524,16 @@ class Game:
         self.phase = "finished"
         self.winner = p.uid
         self._ev("win", text or f"🏆 {p.name} набрал(а) {total} и ПОБЕДИЛ(А)!", p.uid)
+        self._record()
+
+    def _record(self) -> None:
+        self.history.append({"turn": self.turn_no, "uid": self.cur.uid if self.players else None,
+                             "scores": {str(p.uid): p.score for p in self.players}})
 
     def _next_turn(self):
         if self.phase != "play":
             return
+        self._record()
         self.current = (self.current + 1) % len(self.players)
         self._reset_turn()
 
@@ -631,4 +639,32 @@ class Game:
             "last_roll": {k: v for k, v in self.last_roll.items() if k != "forced"} if self.last_roll else None,
             "log": self.log[-40:],
             "winner_uid": self.winner,
+            "summary": self.summary() if self.phase == "finished" else None,
         }
+
+    def summary(self) -> dict:
+        """Итоги партии: таблица по игрокам, история счёта и яркие моменты."""
+        rows = []
+        for p in self.players:
+            st = p.st
+            rows.append({"uid": p.uid, "name": p.name, "score": p.score, "best_turn": st["best_turn"],
+                         "samosvals": st["samosvals"], "bolt_penalties": st["bolt_penalties"],
+                         "overtakes": st["overtakes"], "zeros": st["zeros"], "barrel_falls": st["barrel_falls"]})
+        rows.sort(key=lambda r: (r["uid"] != self.winner, -r["score"]))
+        highlights = []
+        if rows:
+            best = max(rows, key=lambda r: r["best_turn"])
+            if best["best_turn"]:
+                highlights.append(f"💥 Лучший ход: {best['name']} — {best['best_turn']}")
+            for key, text in (("samosvals", "🚛 Самосвалов"), ("bolt_penalties", "🔩 Штрафов за болты"),
+                              ("overtakes", "🏎 Обгонов")):
+                top = max(rows, key=lambda r: r[key])
+                if top[key]:
+                    highlights.append(f"{text} больше всех: {top['name']} ({top[key]})")
+        if self.winner is not None and self.history:
+            w = str(self.winner)
+            gap = max((max(h["scores"].values()) - h["scores"].get(w, 0) for h in self.history), default=0)
+            if gap >= 200:
+                name = next((r["name"] for r in rows if r["uid"] == self.winner), "?")
+                highlights.append(f"🔄 Камбэк: {name} отставал(а) на {gap} и победил(а)")
+        return {"rows": rows, "history": self.history[-400:], "highlights": highlights}
