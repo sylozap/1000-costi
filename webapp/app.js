@@ -649,7 +649,7 @@ function renderGame(s) {
       add(p.order_rolls.length ? `🎲 ${p.order_rolls.join(' → ')}` : '🎲 ждём', p.order_pending ? 'warn' : '');
     } else {
       if (!p.opened && r.open_min) add('не открыт');
-      if (p.debt) add(`долг −${p.debt}`, 'bad');
+      if (p.debt) add(`долг ${p.debt}`, 'bad');
       if (p.in_pit) add('🕳 яма', 'warn');
       if (p.on_barrel) add(`🛢 ${p.barrel_attempts}/${r.barrel_attempts}`, 'warn swing');
       if (p.barrel_falls) add(`💥${p.barrel_falls}`, 'bad');

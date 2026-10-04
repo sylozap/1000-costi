@@ -85,6 +85,47 @@ def test_bolts_before_open_debt():
     assert p1.score == 10 and p1.debt == 0 and p1.opened
 
 
+def test_debt_partial_payoff():
+    """Порог 50, долг 100: записал 60 — вошёл в игру, долг 40 гасится следующими записями."""
+    g, rng = make({"bolts_before_open": True})
+    p1 = setp(g, 1, debt=100)
+    turn(g, rng, (5, 5, 5, 2, 3), (1, 6))  # 50 + 10 = 60
+    assert p1.opened and p1.score == 0 and p1.debt == 40
+    turn(g, rng, ZERO, stop=False)  # P2
+    turn(g, rng, (5, 2, 3, 3, 6), (5, 2, 3, 6))  # 10
+    assert p1.score == 0 and p1.debt == 30
+    turn(g, rng, ZERO, stop=False)
+    turn(g, rng, (1, 2, 3, 3, 6), (1, 5, 2, 3))  # 25
+    turn(g, rng, ZERO, stop=False)
+    turn(g, rng, (1, 1, 1, 2, 3))  # 100
+    assert p1.score == 95 and p1.debt == 0
+
+
+def test_debt_bolt_penalty_after_open_adds_debt():
+    g, rng = make({"bolts_before_open": True})
+    p1 = setp(g, 1, opened=True, debt=40, bolts=2)
+    turn(g, rng, ZERO, stop=False)
+    assert p1.debt == 140 and p1.score == 0
+
+
+def test_debt_samosval_by_real_score():
+    g, rng = make({"bolts_before_open": True})
+    p1 = setp(g, 1, debt=100)
+    g.turn_points, g.rolls_in_turn, g.dice_left = 650, 3, 1
+    turn(g, rng, (5,), stop=False)  # 655 − 100 = 555
+    assert p1.score == 0 and p1.debt == 0 and p1.opened and g.cur.uid == 2
+
+
+def test_debt_not_charged_twice_after_samosval():
+    g, rng = make({"bolts_before_open": True})
+    p1 = setp(g, 1, debt=100)
+    g.turn_points, g.rolls_in_turn, g.dice_left = 650, 3, 1
+    turn(g, rng, (5,), stop=False)
+    turn(g, rng, ZERO, stop=False)
+    turn(g, rng, (1, 1, 1, 2, 3))
+    assert p1.score == 100 and p1.debt == 0
+
+
 # ---------- ямы ----------
 
 def test_pits_off():

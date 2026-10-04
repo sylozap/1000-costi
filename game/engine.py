@@ -22,7 +22,7 @@ class Player:
     score: int = 0
     opened: bool = False
     bolts: int = 0
-    debt: int = 0  # штраф за болты до открытия, вычитается при открытии
+    debt: int = 0  # штраф за болты до открытия: гасится из записанных очков, пока не выплачен
     on_barrel: bool = False
     barrel_attempts: int = 0
     barrel_falls: int = 0
@@ -189,7 +189,7 @@ class Game:
         if not p.opened and r["open_min"]:
             parts.append(f"открытие: нужно {r['open_min']}+ за ход")
         if p.debt:
-            parts.append(f"долг за болты −{p.debt} спишется при открытии")
+            parts.append(f"долг за болты {p.debt} — гасится из записанных очков")
         top = self.pit_top(start)
         if top is not None:
             parts.append(f"яма: нужно {top - start}+ чтобы выбраться")
@@ -291,13 +291,14 @@ class Game:
             what = "бросает все 5 заново" if self.must_roll else "может записать или бросать все 5"
             self._ev("hot", f"🔥 {p.name}: все кубики сыграли — {what}", uid, notable=False)
 
-        total = p.score + self.turn_points
+        total = p.score + self.turn_points - p.debt  # реальный счёт с учётом долга
         five_ones = r["scoring"]["five_ones"]
         if n == 5 and dice == [1] * 5 and (five_ones == "any" or (five_ones == "first" and self.rolls_in_turn == 1)):
             self._win(p, total, f"🎯 {p.name}: ПЯТЬ ЕДИНИЦ — ПОБЕДА!")
         elif r["samosval_on"] and total == r["samosval"]:
             # самосвал посреди хода: ход сразу заканчивается, дальше бросать нельзя
             p.opened = True
+            p.debt = 0
             self._set_score(p, r["samosval"])
             self._next_turn()
         elif self.barrel == "none" and total >= TARGET:
@@ -334,10 +335,12 @@ class Game:
         old = p.score
         start_pit = self.pit_top(self.turn_start_score)
         new = old + self.turn_points
-        if not p.opened and p.debt:
-            self._ev("debt", f"🔩 {p.name}: списан долг за болты −{p.debt}", p.uid, notable=False)
-            new -= p.debt
-            p.debt = 0
+        if p.debt:
+            pay = min(p.debt, self.turn_points)
+            p.debt -= pay
+            new -= pay
+            left = f", осталось {p.debt}" if p.debt else " — долг погашен"
+            self._ev("debt", f"🔩 {p.name}: из записанных очков списан долг −{pay}{left}", p.uid, notable=False)
         p.opened = True
         if r["bolts_reset_on_commit"]:
             p.bolts = 0
@@ -438,10 +441,10 @@ class Game:
         p.bolts = 0
         p.st["bolt_penalties"] += 1
         p.facts.add("bolts3")
-        if not p.opened:
+        if not p.opened or p.debt:
             p.debt += r["bolt_penalty"]
-            self._ev("bolt_penalty", f"🔩 {p.name}: {r['bolts_limit']}-й болт{lost} — долг −{r['bolt_penalty']} "
-                                     f"(спишется при открытии)", p.uid)
+            self._ev("bolt_penalty", f"🔩 {p.name}: {r['bolts_limit']}-й болт{lost} — долг +{r['bolt_penalty']} "
+                                     f"(всего {p.debt}, гасится из записанных очков)", p.uid)
         else:
             self._ev("bolt_penalty", f"🔩 {p.name}: {r['bolts_limit']}-й болт{lost} — штраф −{r['bolt_penalty']}",
                      p.uid)
@@ -515,6 +518,7 @@ class Game:
         p.st["best_turn"] = max(p.st["best_turn"], self.turn_points)
         p.score = total
         p.opened = True
+        p.debt = 0
         self.phase = "finished"
         self.winner = p.uid
         self._ev("win", text or f"🏆 {p.name} набрал(а) {total} и ПОБЕДИЛ(А)!", p.uid)
@@ -552,7 +556,9 @@ class Game:
 
     def admin_set_score(self, uid: int, value: int) -> None:
         p = self.player(uid)
-        p.score = max(0, int(value))
+        value = int(value)
+        p.score = max(0, value)
+        p.debt = max(0, -value)  # отрицательное значение = долг
         if p.score > 0:
             p.opened = True
         start = self.rules["barrel_start"]
