@@ -33,8 +33,8 @@ def test_stats_persist(tmp_path):
     g.players[0].st["samosvals"] = 2
     g.players[0].st["best_turn"] = 300
     st = Stats(path)
-    st.record_game(-100, g.players, winner_uid=1)
-    st.record_game(-100, g.players, winner_uid=2)
+    st.record_game(-100, g.players, 1)
+    st.record_game(-100, g.players, 2)
     again = Stats(path)  # «перезапуск»
     rows = {r["uid"]: r for r in again.chat_table(-100)}
     assert rows[1]["games"] == 2 and rows[1]["wins"] == 1 and rows[1]["samosvals"] == 4

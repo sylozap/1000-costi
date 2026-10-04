@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import secrets
 import time
 from pathlib import Path
@@ -12,7 +13,9 @@ from typing import TYPE_CHECKING
 from . import config
 from .achievements import ACHIEVEMENTS, career_ids, end_ids, moment_ids
 from .ai import BOT_STYLES, is_bot, wants_stop
-from .engine import Game, GameError
+from .engine import TEAM_NAMES, Game, GameError
+from .history import History, chat_records, game_record, profile
+from .winprob import chances_from_clone, sim_clone
 from .profiles import ALL_SKINS, MAPS, PERSONAL_SKINS, PUBLIC_SKINS, STAKES, Profiles
 from .rules import BUILTIN_PRESETS, RulesError, builtin_label, describe, normalize, same, short_title
 
@@ -75,6 +78,12 @@ class Room:
         self.stakes: dict[int, int] = {}  # кто сколько внёс в банк текущей партии
         self.bots: dict[int, str] = {}    # uid бота (< 0) → характер
         self._bot_task: asyncio.Task | None = None
+        self.teams_mode = False
+        self.team_of: dict[int, int] = {}  # uid → номер команды (командная игра, пары)
+        self.started_at: float | None = None
+        self.winprob: dict[str, float] = {}  # шансы на победу сейчас (uid → 0..1)
+        self.winprob_hist: list[dict] = []  # шансы после каждого хода — для графика итогов
+        self._wp_turn: int | None = None
         self.updated = time.time()
 
     # ---------- состояние ----------
@@ -86,7 +95,8 @@ class Room:
     @property
     def settings(self) -> dict:
         """Короткие настройки (совместимость со старым клиентом и сообщениями бота)."""
-        return {"barrel": self.rules["barrel"], "timer": self.timer, "map": self.map, "stake": self.stake}
+        return {"barrel": self.rules["barrel"], "timer": self.timer, "map": self.map, "stake": self.stake,
+                "teams": self.teams_mode}
 
     def preset_name(self) -> str:
         key = builtin_label(self.rules)
@@ -140,6 +150,10 @@ class Room:
             "maps": MAPS,
             "skins": ALL_SKINS,
             "stakes": list(STAKES),
+            "team_of": {str(u): t for u, t in self.team_of.items()},
+            "team_names": TEAM_NAMES,
+            "winprob": self.winprob,
+            "winprob_hist": self.winprob_hist if self.status == "finished" else None,
         }
 
     def skin_of(self, uid: int) -> str:
@@ -185,6 +199,7 @@ class Room:
         if (not spectate and self.status == "lobby" and uid not in self.members
                 and len(self.members) < MAX_PLAYERS):
             self.members[uid] = name
+            self._auto_team(uid)
             await self.manager.notify("lobby_update", self)
         await self.broadcast()
 
@@ -240,6 +255,41 @@ class Room:
             await self.manager.broadcast_all()
             return
 
+        if action == "profile_full":
+            target = int(msg.get("uid") or uid)
+            await self.send_to(ws, self.manager.profile_full(target, viewer=uid))
+            return
+
+        if action == "records":
+            await self.send_to(ws, {"type": "records", **chat_records(self.manager.history, self.chat_id)})
+            return
+
+        if action == "game_detail":
+            rec = self.manager.history.get(str(msg.get("id") or ""))
+            self._require(rec is not None, "партия не найдена")
+            await self.send_to(ws, {"type": "game_detail", "game": rec})
+            return
+
+        if action == "team":
+            self._require(self.status == "lobby" and self.teams_mode, "команды выбираются в лобби")
+            target = int(msg.get("uid") or uid)
+            self._require(target == uid or is_owner or admin, "менять чужую команду может только создатель")
+            self._require(target in self.members, "игрок не в лобби")
+            team = int(msg.get("team", -1))
+            self._require(0 <= team < len(TEAM_NAMES), "нет такой команды")
+            self._require(sum(1 for u, t in self.team_of.items() if t == team and u != target) < 2, "в команде уже двое")
+            self.team_of[target] = team
+            await self.broadcast()
+            return
+
+        if action == "shuffle_teams":
+            self._require(self.status == "lobby" and self.teams_mode and (is_owner or admin), "перемешивает создатель")
+            uids = list(self.members)
+            random.shuffle(uids)
+            self.team_of = {u: i // 2 for i, u in enumerate(uids)}
+            await self.broadcast()
+            return
+
         if action == "my_presets":
             await self.send_to(ws, {"type": "presets", "list": self.manager.presets_of(uid)})
             return
@@ -272,6 +322,7 @@ class Room:
                 if len(self.members) >= MAX_PLAYERS:
                     raise GameError("комната заполнена")
                 self.members[uid] = name
+                self._auto_team(uid)
                 await self.manager.notify("lobby_update", self)
 
         elif action == "settings":
@@ -281,6 +332,13 @@ class Room:
                 if timer not in TIMER_OPTIONS:
                     raise GameError("неверный таймер")
                 self.timer = timer
+            if "teams" in msg:
+                self._require(self.status == "lobby", "команды настраиваются в лобби")
+                self.teams_mode = bool(msg["teams"])
+                self.team_of = {}
+                if self.teams_mode:
+                    for u in self.members:
+                        self._auto_team(u)
             if "map" in msg:
                 if msg["map"] not in MAPS:
                     raise GameError("неизвестная карта")
@@ -322,15 +380,19 @@ class Room:
             same_name = sum(1 for b in self.bots.values() if b == style)
             self.members[bid] = name + (f" {same_name + 1}" if same_name else "")
             self.bots[bid] = style
+            self._auto_team(bid)
             self.stake = 0
             await self.manager.notify("lobby_update", self)
 
         elif action == "start":
             self._require(is_owner and self.status == "lobby", "начать может только создатель")
             self._require(len(self.members) >= 1, "нет игроков")
+            teams = self._teams_list() if self.teams_mode else None
             self._take_stakes()
-            self.game = Game(list(self.members.items()), rules=self.rules)
+            self.game = Game(list(self.members.items()), rules=self.rules, teams=teams)
             self.status = "game"
+            self.started_at = time.time()
+            self.winprob, self.winprob_hist, self._wp_turn = {}, [], None
             self.snapshots = []
             self._announced = {}
             self._audit(uid, name, "start", self.preset_name())
@@ -379,6 +441,24 @@ class Room:
             raise GameError("неизвестное действие")
 
         await self._after(events)
+
+    def _auto_team(self, uid: int) -> None:
+        """Новый игрок в командном режиме встаёт в первую команду со свободным местом."""
+        if not self.teams_mode or uid in self.team_of:
+            return
+        for t in range(len(TEAM_NAMES)):
+            if sum(1 for v in self.team_of.values() if v == t) < 2:
+                self.team_of[uid] = t
+                return
+
+    def _teams_list(self) -> list[list[int]]:
+        teams: dict[int, list[int]] = {}
+        for u in self.members:
+            self._require(u in self.team_of, f"{self.members[u]} не выбрал(а) команду")
+            teams.setdefault(self.team_of[u], []).append(u)
+        self._require(len(teams) >= 2 and all(len(t) == 2 for t in teams.values()),
+                      "в командной игре нужны пары: в каждой команде ровно 2 игрока, команд — от двух")
+        return [teams[k] for k in sorted(teams)]
 
     def _rate_ok(self, uid: int, gap: float) -> bool:
         now = time.time()
@@ -447,6 +527,7 @@ class Room:
         if self.status == "lobby":
             self.members.pop(uid, None)
             self.bots.pop(uid, None)
+            self.team_of.pop(uid, None)
             if uid == self.owner:
                 if not self.members:
                     await self.cancel()
@@ -471,16 +552,43 @@ class Room:
             if self.game.phase == "finished":
                 self.status = "finished"
                 self._cancel_timer()
+                self.winprob = {str(p.uid): float(p.uid in self.game.winners) for p in self.game.players}
+                self.winprob_hist.append({"turn": self.game.turn_no, "p": self.winprob})
                 if self.game.winner is not None:
                     self.manager.record(self)
                     await self._check_achievements(final=True)
-                    await self._pay_bank(self.game.winner)
+                    await self._pay_bank(self.game.winners or [self.game.winner])
                 else:
                     self._refund()
                 await self.manager.notify("game_over", self)
             else:
                 self._restart_timer()
                 self._schedule_bot()
+                self._schedule_winprob()
+        await self.broadcast()
+
+    # ---------- шансы на победу ----------
+
+    def _schedule_winprob(self) -> None:
+        """В начале каждого хода считаем шансы в фоновом потоке (симуляция партии до конца)."""
+        g = self.game
+        if not config.WINPROB_BUDGET or not g or g.phase != "play" or g.rolls_in_turn or g.turn_no == self._wp_turn:
+            return
+        self._wp_turn = turn = g.turn_no
+        base = sim_clone(g, random.Random())
+        uids = [p.uid for p in g.players]
+        asyncio.create_task(self._winprob_task(g, turn, base, uids))
+
+    async def _winprob_task(self, g, turn: int, base, uids: list[int]) -> None:
+        try:
+            probs = await asyncio.to_thread(chances_from_clone, base, uids, config.WINPROB_BUDGET)
+        except Exception:  # noqa: BLE001 — аналитика не должна ронять игру
+            log.exception("winprob failed in room %s", self.id)
+            return
+        if self.game is not g or self.status != "game":
+            return
+        self.winprob = probs
+        self.winprob_hist.append({"turn": turn, "p": probs})
         await self.broadcast()
 
     # ---------- фишки ----------
@@ -497,14 +605,18 @@ class Room:
             prof.add_chips(u, -self.stake)
             self.stakes[u] = self.stake
 
-    async def _pay_bank(self, winner: int) -> None:
+    async def _pay_bank(self, winners: list[int]) -> None:
+        """Банк — победителю; в командной игре делится поровну между игроками команды."""
         bank = sum(self.stakes.values())
         self.stakes = {}
-        if not bank or is_bot(winner):
+        people = [u for u in winners if not is_bot(u)]
+        if not bank or not people:
             return
-        self.manager.profiles.add_chips(winner, bank)
-        name = self.game.player(winner).name if self.game else "?"
-        await self.send_all({"type": "bank", "uid": winner, "name": name, "amount": bank})
+        share = bank // len(people)
+        for u in people:
+            self.manager.profiles.add_chips(u, share)
+        names = " и ".join(self.game.player(u).name for u in people) if self.game else "?"
+        await self.send_all({"type": "bank", "uid": people[0], "uids": people, "name": names, "amount": bank})
 
     def _refund(self) -> None:
         for u, amount in self.stakes.items():
@@ -732,6 +844,7 @@ class RoomManager:
         self.bot_username: str | None = None
         self.admin_prefs: dict[int, dict] = self._load_admin_prefs()
         self.profiles = Profiles(data_dir / "profiles.json" if data_dir else None)
+        self.history = History(data_dir / "games.jsonl" if data_dir else None)
 
     # ---------- комнаты ----------
 
@@ -780,9 +893,30 @@ class RoomManager:
     # ---------- статистика, ачивки, пресеты ----------
 
     def record(self, room: Room) -> None:
+        if room.game and any(p.uid >= 0 for p in room.game.players):
+            self.history.add(game_record(room))
         if self.stats and room.chat_id is not None and room.game:
             people = [p for p in room.game.players if not is_bot(p.uid)]
-            self.stats.record_game(room.chat_id, people, room.game.winner)
+            self.stats.record_game(room.chat_id, people, room.game.winners)
+
+    def profile_full(self, uid: int, viewer: int | None = None) -> dict:
+        """Полный профиль: аналитика по истории + карьерная статистика, ачивки, скин, фишки."""
+        admin = is_admin(uid)
+        gold = self.admin_prefs.get(uid, {}).get("gold", True)
+        total = self.stats.user_total(uid) if self.stats else None
+        ach = self.achievements_of(uid)
+        return {"type": "profile_full", **profile(self.history, uid, viewer),
+                "name": (total or {}).get("name") or self._name_of(uid),
+                "career": total, "chips": self.profiles.chips(uid), "skin": self.profiles.skin(uid, admin, gold),
+                "achievements": [a for a in ach if a["got"]], "achievements_total": len(ach)}
+
+    def _name_of(self, uid: int) -> str:
+        for r in self.rooms.values():
+            if uid in r.members:
+                return r.members[uid]
+            if r.game and any(p.uid == uid for p in r.game.players):
+                return r.game.player(uid).name
+        return "Игрок"
 
     def profile_msg(self, uid: int) -> dict:
         admin = is_admin(uid)

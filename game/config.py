@@ -33,3 +33,5 @@ MAX_PLAYERS = 8
 WEBAPP_DIR = ROOT / "webapp"
 # Администраторы бота (админ-панель): id пользователей Telegram через запятую
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "621983693").replace(" ", "").split(",") if x}
+# Сколько секунд CPU на расчёт шансов на победу после каждого хода (0 — не считать)
+WINPROB_BUDGET = float(os.environ.get("WINPROB_BUDGET", "0.6"))

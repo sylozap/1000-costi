@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 from .rules import BARREL_MODES, TARGET, normalize, risk_table
 from .scoring import score_roll
 
-__all__ = ["Game", "GameError", "Player", "TARGET", "BARREL_MODES", "RIG_MODES"]
+__all__ = ["Game", "GameError", "Player", "Side", "TARGET", "BARREL_MODES", "RIG_MODES", "TEAM_NAMES"]
+
+TEAM_NAMES = ["🔴 Красные", "🔵 Синие", "🟢 Зелёные", "🟡 Жёлтые"]
 
 # Подкрутка бросков конкретного игрока (админ):
 #   exact — точные значения (0 = случайно), low/good/bolt — «естественный» исход нужного вида,
@@ -34,14 +36,29 @@ def _combos(n: int, scoring_json: str) -> dict[int, list[tuple[int, ...]]]:
     return out
 
 
+@lru_cache(maxsize=32)
+def roll_odds(n: int, scoring_json: str) -> tuple[float, float]:
+    """(шанс пустого броска, ожидаемые очки) для n кубиков — для аналитики удачи и решений."""
+    sc = json.loads(scoring_json)
+    zero = total = 0
+    for dice in itertools.product(range(1, 7), repeat=n):
+        pts = score_roll(list(dice), sc)[0]
+        zero += pts == 0
+        total += pts
+    count = 6 ** n
+    return zero / count, total / count
+
+
 class GameError(Exception):
     pass
 
 
+# общее состояние стороны: у одиночного игрока своё, у команды — одно на двоих
+SIDE_FIELDS = ("score", "opened", "bolts", "debt", "on_barrel", "barrel_attempts", "barrel_falls", "dots", "dot_penalties")
+
+
 @dataclass
-class Player:
-    uid: int
-    name: str
+class Side:
     score: int = 0
     opened: bool = False
     bolts: int = 0
@@ -51,6 +68,24 @@ class Player:
     barrel_falls: int = 0
     dots: int = 0
     dot_penalties: int = 0
+    team: int | None = None  # номер команды (None — одиночный игрок)
+
+
+def new_analytics() -> dict:
+    """Счётчики игрока за партию для аналитики (удача, риск, решения, соперники, честность кубиков)."""
+    return {
+        "turns": 0, "rolls": 0, "pts": 0, "exp": 0.0, "faces": [0] * 6,
+        "commits": 0, "commit_pts": 0, "burned": 0, "burned_pts": 0,
+        "risky_opps": 0, "risky_rolls": 0, "dec": 0, "dec_good": 0,
+        "overtook": {}, "zeroed": {},
+    }
+
+
+@dataclass
+class Player:
+    uid: int
+    name: str
+    side: Side = field(default_factory=Side)
     order_rolls: list[int] = field(default_factory=list)
     # статистика за партию
     st: dict = field(default_factory=lambda: {
@@ -59,11 +94,21 @@ class Player:
     })
     # факты для ачивок (game/achievements.py)
     facts: set = field(default_factory=set)
+    an: dict = field(default_factory=new_analytics)
+
+
+def _side_prop(name: str) -> property:
+    return property(lambda self: getattr(self.side, name), lambda self, v: setattr(self.side, name, v))
+
+
+for _f in SIDE_FIELDS:
+    setattr(Player, _f, _side_prop(_f))
 
 
 class Game:
     def __init__(self, players: list[tuple[int, str]], rules: dict | None = None,
-                 rng: random.Random | None = None, barrel: str | None = None):
+                 rng: random.Random | None = None, barrel: str | None = None,
+                 teams: list[list[int]] | None = None):
         if not players:
             raise GameError("нет игроков")
         self.rules = normalize(rules)
@@ -75,9 +120,21 @@ class Game:
                 self.rules["barrel_start"] = 850
         self.rng = rng or random.SystemRandom()
         self.players = [Player(uid, name) for uid, name in players]
+        self.teams = bool(teams)
+        if teams:
+            uids = {p.uid for p in self.players}
+            if any(len(t) != 2 for t in teams) or len(teams) < 2 or sorted(u for t in teams for u in t) != sorted(uids):
+                raise GameError("команды — пары: в каждой ровно 2 игрока, команд не меньше двух")
+            for i, t in enumerate(teams):
+                side = Side(team=i)
+                for uid in t:
+                    self.player(uid).side = side
+        self.order: list[int] = [p.uid for p in self.players]  # очередь ходов (uid), задаётся после розыгрыша
         self.phase = "order"  # order -> play -> finished
         self.current = 0
         self.winner: int | None = None
+        self.winners: list[int] = []  # все победители (в командной игре — оба игрока команды)
+        self.quiet = False  # режим симуляции: без журнала, истории и аналитики
         self.roll_seq = 0
         self.turn_no = 0
         self.last_roll: dict | None = None
@@ -103,7 +160,7 @@ class Game:
     def set_rules(self, rules: dict) -> None:
         self.rules = normalize(rules)
         start = self.rules["barrel_start"]
-        for p in self.players:
+        for p in self.sides():
             if not self.barrel_mode or p.score < start:
                 p.on_barrel = False
                 p.barrel_attempts = 0
@@ -131,10 +188,30 @@ class Game:
         self.turn_start_attempts = p.barrel_attempts if p else 0
         if self.phase == "play":
             self.turn_no += 1
+            if not self.quiet:
+                p.an["turns"] += 1
 
     @property
     def cur(self) -> Player:
-        return self.players[self.current]
+        return self.player(self.order[self.current])
+
+    # ---------- стороны и команды ----------
+
+    def sides(self) -> list[Side]:
+        """Стороны партии: одиночные игроки или команды (без повторов, в порядке игроков)."""
+        seen = {}
+        for p in self.players:
+            seen.setdefault(id(p.side), p.side)
+        return list(seen.values())
+
+    def members(self, side: Side) -> list[Player]:
+        return [p for p in self.players if p.side is side]
+
+    def side_name(self, side: Side) -> str:
+        ms = self.members(side)
+        if side.team is None:
+            return ms[0].name if ms else "?"
+        return f"{TEAM_NAMES[side.team % len(TEAM_NAMES)]} ({' и '.join(m.name for m in ms)})"
 
     def player(self, uid: int) -> Player:
         for p in self.players:
@@ -143,6 +220,8 @@ class Game:
         raise GameError("вы не участник этой игры")
 
     def _ev(self, kind: str, text: str, uid: int | None = None, notable: bool = True, **extra):
+        if self.quiet:
+            return None
         self._ev_seq += 1
         ev = {"id": self._ev_seq, "kind": kind, "text": text, "uid": uid, "notable": notable, **extra}
         self.log.append(ev)
@@ -357,22 +436,55 @@ class Game:
         if self.phase != "order" or any(self.order_pending(p) for p in self.players):
             return
         self.players.sort(key=lambda p: tuple(p.order_rolls), reverse=True)
+        if self.teams:
+            # команды ходят по очереди, внутри команды игроки чередуются: А1, Б1, А2, Б2
+            rows = [self.members(sd) for sd in self.sides()]
+            self.order = [ms[k].uid for k in range(2) for ms in rows if len(ms) > k]
+        else:
+            self.order = [p.uid for p in self.players]
         self.phase = "play"
         self.current = 0
         self._reset_turn()
         self._record()
-        names = ", ".join(f"{i + 1}. {p.name}" for i, p in enumerate(self.players))
+        names = ", ".join(f"{i + 1}. {self.player(u).name}" for i, u in enumerate(self.order))
         self._ev("order_done", f"Порядок ходов: {names}")
 
     # ---------- ход ----------
+
+    def _note_decision(self, p: Player, rolled: bool) -> None:
+        """Аналитика решения «бросать/записать»: сравниваем с выгодой одного броска по математике."""
+        if self.quiet or self.rolls_in_turn == 0 or self.must_roll or not self.can_stop():
+            return
+        n = self.dice_left
+        p0, mean = roll_odds(n, json.dumps(self.rules["scoring"], sort_keys=True))
+        roll_better = mean - p0 * self.turn_points > 0
+        a = p.an
+        a["dec"] += 1
+        a["dec_good"] += int(roll_better == rolled)
+        if n <= 2:
+            a["risky_opps"] += 1
+            a["risky_rolls"] += int(rolled)
+
+    def _note_roll(self, p: Player, dice: list[int], points: int, forced: bool) -> None:
+        """Аналитика удачи и честности кубиков (подкрученные броски не считаются)."""
+        if self.quiet or forced:
+            return
+        a = p.an
+        a["rolls"] += 1
+        a["pts"] += points
+        a["exp"] += roll_odds(len(dice), json.dumps(self.rules["scoring"], sort_keys=True))[1]
+        for d in dice:
+            a["faces"][d - 1] += 1
 
     def roll(self, uid: int) -> list[dict]:
         self._begin()
         p = self._check_turn(uid)
         r = self.rules
         n = self.dice_left
+        self._note_decision(p, True)
         dice, forced = self._roll_dice(n, uid)
         points, idx = score_roll(dice, r["scoring"])
+        self._note_roll(p, dice, points, forced)
         confirming = self.must_roll
         self.roll_seq += 1
         self.rolls_in_turn += 1
@@ -446,6 +558,7 @@ class Game:
         p = self._check_turn(uid)
         if not self.can_stop():
             raise GameError("сейчас нельзя записать очки")
+        self._note_decision(p, False)
         self._commit(p)
         return self._new_events
 
@@ -463,6 +576,9 @@ class Game:
         p.opened = True
         if r["bolts_reset_on_commit"]:
             p.bolts = 0
+        if not self.quiet:
+            p.an["commits"] += 1
+            p.an["commit_pts"] += self.turn_points
         p.st["best_turn"] = max(p.st["best_turn"], self.turn_points)
         if self.turn_points >= 300:
             p.facts.add("turn300")
@@ -484,36 +600,51 @@ class Game:
             self._ev("barrel_sit", f"🛢 {p.name} сел(а) на бочку с {p.score}{extra}", p.uid)
             if self.barrel == "knock":
                 drop_to = r["barrel_start"] - r["knock_drop"]
-                for q in self.players:
-                    if q is not p and q.on_barrel:
+                for qs in self.sides():
+                    if qs is not p.side and qs.on_barrel:
+                        q = self.members(qs)[0]
                         q.on_barrel = False
                         q.barrel_attempts = 0
-                        self._ev("barrel_knock", f"🛢💥 {p.name} сбросил(а) {q.name} с бочки → {max(0, drop_to)}",
+                        self._ev("barrel_knock", f"🛢💥 {p.name} сбросил(а) {self.side_name(qs)} с бочки → {max(0, drop_to)}",
                                  q.uid, by=p.uid)
                         self._set_score(q, drop_to)
         if p.score > old:
             pen = r["overtake_penalty"]
-            for q in self.players:
-                if q is p or q.score <= 0:
+            # обгоны считаются между сторонами: напарник по команде не соперник
+            for qs in self.sides():
+                if qs is p.side or qs.score <= 0:
                     continue
-                if old <= q.score < p.score and pen:
+                victims = self.members(qs)
+                q, qn = victims[0], self.side_name(qs)
+                if old <= qs.score < p.score and pen:
                     p.st["overtakes"] += 1
-                    self._overtaken(q)
-                    self._ev("overtake", f"🏎 {p.name} обогнал(а) {q.name}: у {q.name} −{pen}", q.uid,
+                    for v in victims:
+                        self._overtaken(v)
+                        self._hit(p, v, "overtook")
+                    self._ev("overtake", f"🏎 {p.name} обогнал(а) {qn}: у {qn} −{pen}", q.uid,
                              by=p.uid, amount=pen)
                     self._set_score(q, q.score - pen)
-                elif q.score == p.score and old < q.score and r["tie_rule"] != "none":
+                elif qs.score == p.score and old < qs.score and r["tie_rule"] != "none":
                     if r["tie_rule"] == "zero":
-                        self._ev("tie_zero", f"🎯 {p.name} ровно сравнялся(-лась) с {q.name} — {q.name} обнуляется!",
-                                 q.uid, by=p.uid, amount=q.score)
+                        for v in victims:
+                            self._hit(p, v, "zeroed")
+                        self._ev("tie_zero", f"🎯 {p.name} ровно сравнялся(-лась) с {qn} — {qn} обнуляется!",
+                                 q.uid, by=p.uid, amount=qs.score)
                         self._set_score(q, 0)
                     elif pen:
-                        self._overtaken(q)
-                        self._ev("overtake", f"🏎 {p.name} сравнялся(-лась) с {q.name}: у {q.name} −{pen}", q.uid,
+                        for v in victims:
+                            self._overtaken(v)
+                            self._hit(p, v, "overtook")
+                        self._ev("overtake", f"🏎 {p.name} сравнялся(-лась) с {qn}: у {qn} −{pen}", q.uid,
                                  by=p.uid, amount=pen)
                         self._set_score(q, q.score - pen)
         self._track_last()
         self._next_turn()
+
+    def _hit(self, p: Player, victim: Player, key: str) -> None:
+        if not self.quiet:
+            d = p.an[key]
+            d[str(victim.uid)] = d.get(str(victim.uid), 0) + 1
 
     def _overtaken(self, q: Player) -> None:
         q.st["overtaken"] += 1
@@ -522,12 +653,13 @@ class Game:
 
     def _track_last(self) -> None:
         """Для ачивки «с последнего места»: игрок был последним, когда лидер уже далеко."""
-        if len(self.players) < 2:
+        sides = self.sides()
+        if len(sides) < 2:
             return
-        leader = max(p.score for p in self.players)
+        leader = max(sd.score for sd in sides)
         if leader < 600:
             return
-        low = min(p.score for p in self.players)
+        low = min(sd.score for sd in sides)
         for p in self.players:
             if p.score == low:
                 p.facts.add("was_far_last")
@@ -581,6 +713,9 @@ class Game:
             p.st["zeros"] += 1
             if burned >= 300:
                 p.facts.add("burned300")
+            if burned and not self.quiet:
+                p.an["burned"] += 1
+                p.an["burned_pts"] += burned
         if on_barrel:
             p.barrel_attempts += 1
             if p.barrel_attempts >= r["barrel_attempts"]:
@@ -640,10 +775,14 @@ class Game:
         p.debt = 0
         self.phase = "finished"
         self.winner = p.uid
-        self._ev("win", text or f"🏆 {p.name} набрал(а) {total} и ПОБЕДИЛ(А)!", p.uid)
+        self.winners = [m.uid for m in self.members(p.side)]
+        who = self.side_name(p.side) if self.teams else p.name
+        self._ev("win", text or f"🏆 {who} — {total}, ПОБЕДА!", p.uid)
         self._record()
 
     def _record(self) -> None:
+        if self.quiet:
+            return
         self.history.append({"turn": self.turn_no, "uid": self.cur.uid if self.players else None,
                              "scores": {str(p.uid): p.score for p in self.players}})
 
@@ -654,7 +793,7 @@ class Game:
         spec = self.rigs.get(self.cur.uid)
         if spec and spec.get("used"):
             del self.rigs[self.cur.uid]  # цель хода не достигнута — ход кончился, подкрутка снимается
-        self.current = (self.current + 1) % len(self.players)
+        self.current = (self.current + 1) % len(self.order)
         self._reset_turn()
 
     # ---------- состав ----------
@@ -662,21 +801,28 @@ class Game:
     def remove_player(self, uid: int) -> list[dict]:
         self._begin()
         p = self.player(uid)
-        idx = self.players.index(p)
-        was_current = self.phase == "play" and idx == self.current
-        self.players.pop(idx)
+        was_current = self.phase == "play" and self.order[self.current] == uid
+        mates = [m for m in self.members(p.side) if m is not p]
+        self.players.remove(p)
         self.rigs.pop(uid, None)
         self._ev("leave", f"🚪 {p.name} покинул(а) игру", uid)
         if not self.players:
             self.phase = "finished"
             return self._new_events
         if self.phase == "order":
+            self.order = [x.uid for x in self.players]
             self._check_order_done()
         elif self.phase == "play":
-            if idx < self.current:
-                self.current -= 1
-            if self.current >= len(self.players):
-                self.current = 0
+            if mates:  # напарник ходит и за ушедшего — команда не теряет ходы
+                self.order = [mates[0].uid if u == uid else u for u in self.order]
+            else:
+                for i in reversed(range(len(self.order))):
+                    if self.order[i] == uid:
+                        del self.order[i]
+                        if i < self.current:
+                            self.current -= 1
+                if self.current >= len(self.order):
+                    self.current = 0
             if was_current:
                 self._reset_turn()
         return self._new_events
@@ -747,7 +893,10 @@ class Game:
                 "dots": p.dots, "dot_penalties": p.dot_penalties,
                 "order_rolls": p.order_rolls, "order_pending": self.order_pending(p),
                 "in_pit": self.pit_top(p.score) is not None, "best_turn": p.st["best_turn"],
+                "team": p.side.team,
             } for p in self.players],
+            "teams": self.teams,
+            "order": self.order if self.phase == "play" else [],
             "current_uid": self.cur.uid if self.phase == "play" else None,
             "turn_points": self.turn_points,
             "turn_start_score": self.turn_start_score,
@@ -761,6 +910,7 @@ class Game:
             "last_roll": {k: v for k, v in self.last_roll.items() if k != "forced"} if self.last_roll else None,
             "log": self.log[-40:],
             "winner_uid": self.winner,
+            "winners": self.winners,
             "summary": self.summary() if self.phase == "finished" else None,
         }
 
@@ -769,10 +919,10 @@ class Game:
         rows = []
         for p in self.players:
             st = p.st
-            rows.append({"uid": p.uid, "name": p.name, "score": p.score, "best_turn": st["best_turn"],
+            rows.append({"uid": p.uid, "name": p.name, "score": p.score, "team": p.side.team, "best_turn": st["best_turn"],
                          "samosvals": st["samosvals"], "bolt_penalties": st["bolt_penalties"],
                          "overtakes": st["overtakes"], "zeros": st["zeros"], "barrel_falls": st["barrel_falls"]})
-        rows.sort(key=lambda r: (r["uid"] != self.winner, -r["score"]))
+        rows.sort(key=lambda r: (r["uid"] not in self.winners, r["uid"] != self.winner, -r["score"], r["team"] or 0))
         highlights = []
         if rows:
             best = max(rows, key=lambda r: r["best_turn"])

@@ -15,7 +15,8 @@ from aiogram.types import (BotCommand, BotCommandScopeAllGroupChats, BotCommandS
 from . import config
 from .achievements import ACHIEVEMENTS
 from .auth import display_name
-from .engine import GameError
+from .engine import TEAM_NAMES, GameError
+from .history import chat_records
 from .rooms import Room, RoomManager, is_admin
 from .rules import BUILTIN_PRESETS, CLASSIC, describe, short_title
 from .stats import RATING_MIN_GAMES, Presets, Stats
@@ -119,12 +120,21 @@ class GroupNotifier:
         medals = ["🥇", "🥈", "🥉"]
         summary = g.summary()
         rows = []
-        for i, r in enumerate(summary["rows"]):
-            badge = medals[i] if i < 3 else f"{i + 1}."
-            rows.append(f"{badge} {escape(r['name'])} — {r['score']}")
+        if g.teams:  # командная игра: строка на команду
+            ranked = sorted(g.sides(), key=lambda sd: (not any(m.uid in g.winners for m in g.members(sd)), -sd.score))
+            for i, sd in enumerate(ranked):
+                badge = medals[i] if i < 3 else f"{i + 1}."
+                rows.append(f"{badge} {escape(g.side_name(sd))} — {sd.score}")
+        else:
+            for i, r in enumerate(summary["rows"]):
+                badge = medals[i] if i < 3 else f"{i + 1}."
+                rows.append(f"{badge} {escape(r['name'])} — {r['score']}")
         if g.winner is not None:
-            w = next(p for p in g.players if p.uid == g.winner)
-            head = f"🏆 <b>Победа: {mention(w.uid, w.name)}!</b>"
+            ws = [p for p in g.players if p.uid in (g.winners or [g.winner])]
+            who = " и ".join(mention(p.uid, p.name) for p in ws)
+            if g.teams:
+                who = f"{escape(TEAM_NAMES[ws[0].side.team % len(TEAM_NAMES)])} ({who})"
+            head = f"🏆 <b>Победа: {who}!</b>"
         else:
             head = "Игра окончена."
         parts = [head, "", "\n".join(rows)]
@@ -157,6 +167,42 @@ def format_stats_rows(rows: list[dict], chips: dict[int, int] | None = None) -> 
         lines.append(f"{i + 1}. <b>{escape(r.get('name', '?'))}</b> — {rate} побед ({r['wins']} из {games}){mark}\n"
                      f"    🚛 {r['samosvals']} · 🔩 {r['bolt_penalties']} · 🛢💥 {r['barrel_falls']} · "
                      f"🏎 {r['overtakes']} · лучший ход {r['best_turn']}{bal}")
+    return "\n".join(lines)
+
+
+def _dur(sec: int) -> str:
+    m = max(1, round(sec / 60))
+    return f"{m // 60} ч {m % 60} мин" if m >= 60 else f"{m} мин"
+
+
+RECORD_LINES = (
+    ("best_turn", "💥 Лучший ход", lambda v: f"{v}"),
+    ("comeback", "🔄 Камбэк", lambda v: f"отставал(а) на {v}"),
+    ("fastest", "⚡ Быстрая победа", lambda v: f"за {v} ходов"),
+    ("quickest", "⏱ Самая короткая партия", _dur),
+    ("longest", "🐢 Самая долгая партия", _dur),
+    ("samosvals", "🚛 Самосвалов за партию", lambda v: f"{v}"),
+    ("overtakes", "🏎 Обгонов за партию", lambda v: f"{v}"),
+)
+
+
+def format_records(data: dict) -> str:
+    if not data["games"]:
+        return "Рекордов пока нет: история копится с партий, сыгранных после обновления. /newgame"
+    lines = [f"🏛 <b>Зал славы чата</b> · партий: {data['games']}", ""]
+    for key, title, fmt in RECORD_LINES:
+        r = data["records"].get(key)
+        if r:
+            lines.append(f"{title}: <b>{fmt(r['value'])}</b> — {escape(r['name'])}")
+    h = data["honesty"]
+    if h["n"]:
+        verdict = {True: "кубики честные ✅", False: "подозрительно неровно 🤨", None: "мало бросков для вывода"}[h["fair"]]
+        lines += ["", "🎲 Грани 1–6: " + " · ".join(f"{x}%" for x in h["share"]) + f" — {verdict}"]
+    lines += ["", "<b>Последние партии</b>"]
+    for g in data["recent"][:5]:
+        ps = ", ".join(("🏆 " if p["won"] else "") + f"{escape(p['name'])} {p['score']}" for p in g["players"])
+        lines.append(f"• {ps} ({g['turns']} ходов, {_dur(g['duration'])})")
+    lines.append("\nПодробнее, с графиками — в приложении: ☰ → Рекорды чата.")
     return "\n".join(lines)
 
 
@@ -207,6 +253,10 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier, pr
             await message.reply("Завершить игру может её создатель или админ чата.")
             return
         await room.cancel()
+
+    @router.message(Command("records"), groups)
+    async def records(message: Message):
+        await message.reply(format_records(chat_records(manager.history, message.chat.id)))
 
     @router.message(Command("stats"), groups)
     async def stats_group(message: Message):
@@ -306,6 +356,7 @@ async def build_bot(manager: RoomManager, stats: Stats, presets: Presets | None 
         BotCommand(command="newgame", description="Новая игра в 1000"),
         BotCommand(command="endgame", description="Завершить текущую игру"),
         BotCommand(command="stats", description="Рейтинг чата"),
+        BotCommand(command="records", description="Рекорды и последние партии"),
         BotCommand(command="achievements", description="Мои ачивки"),
         BotCommand(command="rules", description="Правила"),
     ]

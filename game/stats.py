@@ -40,7 +40,10 @@ class Stats:
 
     # ---------- партии ----------
 
-    def record_game(self, chat_id, players: list, winner_uid: int | None) -> None:
+    def record_game(self, chat_id, players: list, winners) -> None:
+        """winners — uid победителя или список uid (командная игра)."""
+        if not isinstance(winners, (list, tuple, set)):
+            winners = [] if winners is None else [winners]
         chat = self.data["chats"].setdefault(str(chat_id), {})
         for p in players:
             row = chat.setdefault(str(p.uid), {f: 0 for f in FIELDS})
@@ -48,7 +51,7 @@ class Stats:
                 row.setdefault(f, 0)
             row["name"] = p.name
             row["games"] += 1
-            row["wins"] += int(p.uid == winner_uid)
+            row["wins"] += int(p.uid in winners)
             for f in ("samosvals", "bolt_penalties", "barrel_falls", "overtakes"):
                 row[f] += p.st[f]
             row["best_turn"] = max(row["best_turn"], p.st["best_turn"])

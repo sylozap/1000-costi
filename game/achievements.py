@@ -46,8 +46,8 @@ def moment_ids(p: Player) -> set[str]:
 def end_ids(game: Game, p: Player) -> set[str]:
     """Ачивки, которые определяются по итогам партии."""
     res = set()
-    won = game.winner == p.uid
-    others = [q for q in game.players if q is not p]
+    won = p.uid in (game.winners or [game.winner])
+    others = [q for q in game.players if q.side is not p.side]
     if won:
         if "samosval" in p.facts:
             res.add("phoenix")
