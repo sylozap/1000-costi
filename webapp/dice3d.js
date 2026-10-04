@@ -1,6 +1,7 @@
 // 3D-стол с кубиками. Результат приходит с сервера, анимация лишь «доводит» кубик до нужной грани.
 import * as THREE from './vendor/three.module.min.js';
 import { RoundedBoxGeometry } from './vendor/RoundedBoxGeometry.js';
+import { MAP_BUILDERS } from './maps.js';
 
 const PIPS = {
   1: [[0.5, 0.5]],
@@ -51,13 +52,83 @@ function easeOutBounce(x) {
 const easeOutCubic = (x) => 1 - Math.pow(1 - x, 3);
 const IMPACTS = [[1 / 2.75, 1], [2 / 2.75, 0.45], [2.5 / 2.75, 0.2]];
 
-const SKINS = {
+const WHITE = ['#ffffff', '#dcdcdc'];
+export const SKINS = {
   ivory: { bg: ['#fffdf6', '#e9e0c8'], pip: ['#3a3a3a', '#0b0b0b'], one: ['#ff5a4f', '#a3150f'], metal: 0, rough: 0.35 },
   gold: { bg: ['#fff1a8', '#d9a520'], pip: ['#5a3a00', '#241600'], one: ['#ff5a4f', '#8a0f08'], metal: 0.55, rough: 0.22 },
+  pink: { bg: ['#ffe6f1', '#f29cc3'], pip: ['#a3245a', '#5c0f31'], one: ['#ff3b7a', '#b0103f'], metal: 0.25, rough: 0.2, pattern: 'pearl' },
+  onyx: { bg: ['#3a3a40', '#0c0c0e'], pip: ['#ffe08a', '#b8860b'], one: ['#ffe08a', '#b8860b'], metal: 0.3, rough: 0.22 },
+  ruby: { bg: ['#ff5c6c', '#8a0c18'], pip: WHITE, one: WHITE, metal: 0.15, rough: 0.16 },
+  sapphire: { bg: ['#5cb0ff', '#0b3d91'], pip: WHITE, one: WHITE, metal: 0.15, rough: 0.16 },
+  emerald: { bg: ['#5cefa0', '#0b6b3a'], pip: WHITE, one: WHITE, metal: 0.15, rough: 0.16 },
+  marble: { bg: ['#ffffff', '#d9d9de'], pip: ['#2b2b30', '#000000'], one: ['#2b2b30', '#000000'], metal: 0.05, rough: 0.15, pattern: 'marble' },
+  wood: { bg: ['#d9a066', '#9a5f2c'], pip: ['#3b220e', '#1a0d04'], one: ['#3b220e', '#1a0d04'], metal: 0, rough: 0.55, pattern: 'wood' },
+  neon: { bg: ['#1c1c33', '#07070f'], pip: ['#a8fff7', '#00e5d4'], one: ['#ff9cf0', '#ff2bd6'], metal: 0.1, rough: 0.3, glow: true },
+  ice: { bg: ['#f2fdff', '#93d3ec'], pip: ['#1d6fb8', '#0b3d6e'], one: ['#1d6fb8', '#0b3d6e'], metal: 0.1, rough: 0.08, pattern: 'ice' },
+  candy: { bg: ['#ffffff', '#ffe9f2'], pip: ['#e3266f', '#9c0f45'], one: ['#e3266f', '#9c0f45'], metal: 0, rough: 0.25, pattern: 'candy' },
+  bone: { bg: ['#f4ebd3', '#c4b38a'], pip: ['#4a3420', '#21150a'], one: ['#8a2a14', '#4a0f05'], metal: 0, rough: 0.7, pattern: 'bone' },
 };
 
-function faceTexture(v, renderer, skin = 'ivory') {
-  const sk = SKINS[skin];
+function skinPattern(g, s, kind, v) {
+  const rnd = mulberry32(v * 97 + kind.length);
+  if (kind === 'marble') {
+    for (let i = 0; i < 7; i++) {
+      g.strokeStyle = `rgba(90,90,105,${0.15 + rnd() * 0.25})`;
+      g.lineWidth = 1 + rnd() * 3;
+      g.beginPath();
+      g.moveTo(rnd() * s, 0);
+      g.bezierCurveTo(rnd() * s, s * 0.3, rnd() * s, s * 0.7, rnd() * s, s);
+      g.stroke();
+    }
+  } else if (kind === 'wood') {
+    for (let i = 0; i < 22; i++) {
+      g.strokeStyle = `rgba(90,45,10,${0.15 + rnd() * 0.25})`;
+      g.lineWidth = 1 + rnd() * 2.5;
+      g.beginPath();
+      const y0 = rnd() * s, ph = rnd() * 6;
+      for (let x = 0; x <= s; x += 8) g.lineTo(x, y0 + Math.sin(x * 0.03 + ph) * 5);
+      g.stroke();
+    }
+  } else if (kind === 'ice') {
+    g.strokeStyle = 'rgba(255,255,255,0.75)';
+    g.lineWidth = 1.5;
+    for (let i = 0; i < 5; i++) {
+      let x = rnd() * s, y = rnd() * s;
+      g.beginPath();
+      g.moveTo(x, y);
+      for (let k = 0; k < 4; k++) {
+        x += (rnd() - 0.5) * 90;
+        y += (rnd() - 0.5) * 90;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+  } else if (kind === 'candy') {
+    g.fillStyle = 'rgba(255,120,170,0.35)';
+    for (let k = -s; k < s * 2; k += 46) {
+      g.beginPath();
+      g.moveTo(k, 0); g.lineTo(k + 20, 0); g.lineTo(k + 20 - s, s); g.lineTo(k - s, s);
+      g.fill();
+    }
+  } else if (kind === 'pearl') {
+    const sh = g.createLinearGradient(0, 0, s, s);
+    sh.addColorStop(0, 'rgba(255,255,255,0.45)');
+    sh.addColorStop(0.35, 'rgba(200,220,255,0.18)');
+    sh.addColorStop(0.65, 'rgba(255,210,240,0.25)');
+    sh.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = sh;
+    g.fillRect(0, 0, s, s);
+  } else if (kind === 'bone') {
+    for (let i = 0; i < 160; i++) {
+      g.fillStyle = `rgba(110,80,40,${rnd() * 0.18})`;
+      g.fillRect(rnd() * s, rnd() * s, 2 + rnd() * 3, 2 + rnd() * 3);
+    }
+  }
+}
+
+/** Грань кубика на canvas 256×256. */
+export function faceCanvas(v, skin = 'ivory') {
+  const sk = SKINS[skin] || SKINS.ivory;
   const s = 256;
   const c = document.createElement('canvas');
   c.width = c.height = s;
@@ -67,6 +138,7 @@ function faceTexture(v, renderer, skin = 'ivory') {
   grad.addColorStop(1, sk.bg[1]);
   g.fillStyle = grad;
   g.fillRect(0, 0, s, s);
+  if (sk.pattern) skinPattern(g, s, sk.pattern, v);
   for (const [px, py] of PIPS[v]) {
     const r = v === 1 ? 34 : 22;
     const x = px * s, y = py * s;
@@ -75,11 +147,20 @@ function faceTexture(v, renderer, skin = 'ivory') {
     pg.addColorStop(0, col[0]);
     pg.addColorStop(1, col[1]);
     g.fillStyle = pg;
+    if (sk.glow) {
+      g.shadowColor = col[1];
+      g.shadowBlur = 18;
+    }
     g.beginPath();
     g.arc(x, y, r, 0, Math.PI * 2);
     g.fill();
+    g.shadowBlur = 0;
   }
-  const tex = new THREE.CanvasTexture(c);
+  return c;
+}
+
+function faceTexture(v, renderer, skin = 'ivory') {
+  const tex = new THREE.CanvasTexture(faceCanvas(v, skin));
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   return tex;
@@ -141,13 +222,19 @@ export class DiceTable {
     sun.shadow.radius = 4;
     this.scene.add(sun);
 
+    this.hemi = this.scene.children[0];
+    this.sun = sun;
+    this.feltTex = feltTexture();
     const table = new THREE.Mesh(
       new THREE.PlaneGeometry(16, 16),
-      new THREE.MeshStandardMaterial({ map: feltTexture(), roughness: 1, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ map: this.feltTex, roughness: 1, metalness: 0 }),
     );
     table.rotation.x = -Math.PI / 2;
     table.receiveShadow = true;
     this.scene.add(table);
+    this.table = table;
+    this.mapId = 'felt';
+    this.env = null;
 
     const textures = FACE_ORDER.map((v) => faceTexture(v, this.renderer));
     this.skinTextures = { ivory: textures };
@@ -177,7 +264,62 @@ export class DiceTable {
     this.showStatic([1, 5, 1, 5, 1], [], 12345);
   }
 
-  /** Скин кубиков: 'ivory' (обычные) или 'gold' (золотые кубики создателя). */
+  /** Карта стола: 'felt' (сукно) или одна из MAP_BUILDERS. */
+  setMap(id) {
+    if (id === this.mapId || (id !== 'felt' && !MAP_BUILDERS[id])) return;
+    if (this.env) {
+      this.scene.remove(this.env.group);
+      this.env.group.traverse((o) => {
+        o.geometry?.dispose();
+        for (const m of [].concat(o.material || [])) {
+          m.map?.dispose();
+          m.dispose();
+        }
+      });
+      if (this.env.floor) this.env.floor.dispose();
+    }
+    const env = id === 'felt' ? null : MAP_BUILDERS[id](this.renderer);
+    const light = env?.light || { sky: 0xfff4dc, ground: 0x0a2a18, hemi: 1.1, sun: 0xffffff, sunI: 1.9 };
+    this.hemi.color.setHex(light.sky);
+    this.hemi.groundColor.setHex(light.ground);
+    this.hemi.intensity = light.hemi;
+    this.sun.color.setHex(light.sun);
+    this.sun.intensity = light.sunI;
+    this.table.visible = !env || env.floor !== null;
+    this.table.material.map = env?.floor || this.feltTex;
+    this.table.material.needsUpdate = true;
+    this.renderer.setClearColor(env ? env.clear : 0x0b2416);
+    if (env) this.scene.add(env.group);
+    this.env = env;
+    this.mapId = id;
+    this.dirty = true;
+  }
+
+  /** Куда кубик, летящий из start в end, врежется в стенку карты (или null). */
+  _wallHit(start, end) {
+    const w = this.env?.wall;
+    if (!w) return null;
+    let dx = end.x - start.x, dz = end.z - start.z;
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len;
+    dz /= len;
+    let t = null;
+    if (w.type === 'circle') {
+      const b = end.x * dx + end.z * dz;
+      const c = end.x * end.x + end.z * end.z - w.r * w.r;
+      if (c < -0.3) t = -b + Math.sqrt(b * b - c);
+    } else if (w.type === 'box') {
+      const tx = dx ? (Math.sign(dx) * w.hx - end.x) / dx : Infinity;
+      const tz = dz ? (Math.sign(dz) * w.hz - end.z) / dz : Infinity;
+      t = Math.min(tx, tz);
+    } else if (w.type === 'back' && dz < -0.2) {
+      t = (w.z - end.z) / dz;
+    }
+    if (t === null || !(t > 0.35) || t > 7) return null;
+    return new THREE.Vector3(end.x + dx * t, HALF, end.z + dz * t);
+  }
+
+  /** Скин кубиков (см. SKINS): обычные, золотые, розовые и т.д. */
   setSkin(name) {
     if (!SKINS[name] || name === this.skin) return;
     if (!this.skinTextures[name]) {
@@ -231,8 +373,14 @@ export class DiceTable {
       const start = new THREE.Vector3(pts[i].x * 0.35 + (rnd() - 0.5) * 2.2, 2.4 + rnd() * 1.4, 4.6 + rnd() * 1.2);
       const dx = end.x - start.x, dz = end.z - start.z;
       const axis = new THREE.Vector3(dz, (rnd() - 0.5) * 0.8, -dx).normalize();
+      const via = this._wallHit(start, end);
+      let kb = 0;
+      if (via) {
+        const l1 = Math.hypot(via.x - start.x, via.z - start.z);
+        kb = l1 / (l1 + via.distanceTo(end));
+      }
       return {
-        qf, end, start, axis,
+        qf, end, start, axis, via, kb, hitWall: false,
         spin: 9 + rnd() * 7,
         delay: i * 0.05 + rnd() * 0.08,
         dur: 1.05 + rnd() * 0.3,
@@ -320,12 +468,30 @@ export class DiceTable {
       const d = this.dice[i];
       const t = Math.min(1, Math.max(0, (el - p.delay) / p.dur));
       if (t < 1) done = false;
-      const k = easeOutCubic(Math.min(1, t / 0.85));
-      d.mesh.position.set(
-        p.start.x + (p.end.x - p.start.x) * k,
-        HALF + (p.start.y - HALF) * (1 - easeOutBounce(t)),
-        p.start.z + (p.end.z - p.start.z) * k,
-      );
+      const y = HALF + (p.start.y - HALF) * (1 - easeOutBounce(t));
+      if (p.via) {
+        // удар о стенку совпадает с первым касанием пола, потом кубик откатывается к своему месту
+        const tb = IMPACTS[0][0];
+        if (t < tb) {
+          const k = t / tb;
+          d.mesh.position.set(p.start.x + (p.via.x - p.start.x) * k, y, p.start.z + (p.via.z - p.start.z) * k);
+        } else {
+          const k = easeOutCubic(Math.min(1, (t - tb) / (0.85 - tb)));
+          d.mesh.position.set(p.via.x + (p.end.x - p.via.x) * k, y, p.via.z + (p.end.z - p.via.z) * k);
+          if (!p.hitWall) {
+            p.hitWall = true;
+            this.env?.onWall?.(p.via);
+            this.hooks.onWall?.(i);
+          }
+        }
+      } else {
+        const k = easeOutCubic(Math.min(1, t / 0.85));
+        d.mesh.position.set(
+          p.start.x + (p.end.x - p.start.x) * k,
+          y,
+          p.start.z + (p.end.z - p.start.z) * k,
+        );
+      }
       const r = easeOutCubic(Math.min(1, t / 0.92));
       const spinQ = qa(p.axis, -p.spin * (1 - r));
       d.mesh.quaternion.multiplyQuaternions(spinQ, p.qf);
@@ -347,6 +513,7 @@ export class DiceTable {
   _loop(now) {
     requestAnimationFrame(this._loop);
     if (this.anim) this._step(now);
+    if (this.env?.update && this.env.update(now)) this.dirty = true;
     let shakeX = 0;
     if (this.camShake > 0) {
       this.dirty = true;
