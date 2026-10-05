@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 FIELDS = ("games", "wins", "samosvals", "bolt_penalties", "barrel_falls", "overtakes", "best_turn")
+COUNTERS = ("samosvals", "bolt_penalties", "barrel_falls", "overtakes")  # суммируются по партиям
 RATING_MIN_GAMES = 3
 
 
@@ -52,10 +53,37 @@ class Stats:
             row["name"] = p.name
             row["games"] += 1
             row["wins"] += int(p.uid in winners)
-            for f in ("samosvals", "bolt_penalties", "barrel_falls", "overtakes"):
+            for f in COUNTERS:
                 row[f] += p.st[f]
             row["best_turn"] = max(row["best_turn"], p.st["best_turn"])
         self._save()
+
+    def adjust_game(self, chat_id, players: list[dict], winners: list, sign: int) -> None:
+        """Возвращает (sign=1) или убирает (sign=-1) партию из счётчиков чата. players — записи из истории партий.
+        Лучший ход здесь не трогаем: это максимум, его пересчитывает вызывающий код."""
+        chat = self.data["chats"].setdefault(str(chat_id), {})
+        for p in players:
+            key = str(p["uid"])
+            row = chat.setdefault(key, {f: 0 for f in FIELDS})
+            for f in FIELDS:
+                row.setdefault(f, 0)
+            row.setdefault("name", p["name"])
+            row["games"] = max(0, row["games"] + sign)
+            row["wins"] = max(0, row["wins"] + sign * int(p["uid"] in winners))
+            for f in COUNTERS:
+                row[f] = max(0, row[f] + sign * p["st"].get(f, 0))
+            if row["games"] == 0:
+                del chat[key]
+        self._save()
+
+    def row(self, chat_id, uid: int) -> dict | None:
+        return self.data["chats"].get(str(chat_id), {}).get(str(uid))
+
+    def set_best_turn(self, chat_id, uid: int, value: int) -> None:
+        row = self.row(chat_id, uid)
+        if row is not None:
+            row["best_turn"] = value
+            self._save()
 
     def chat_table(self, chat_id) -> list[dict]:
         """Игроки чата: сначала рейтинг по проценту побед (от 3 партий), затем остальные."""
@@ -95,6 +123,15 @@ class Stats:
         mine[aid] = time.time()
         self._save()
         return True
+
+    def set_unlock(self, uid: int, aid: str, ts: float | None) -> None:
+        """Переносит время получения ачивки; None — забирает ачивку."""
+        mine = self.data["achievements"].setdefault(str(uid), {})
+        if ts is None:
+            mine.pop(aid, None)
+        else:
+            mine[aid] = ts
+        self._save()
 
 
 class Presets:

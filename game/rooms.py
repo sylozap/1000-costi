@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import config
-from .achievements import ACHIEVEMENTS, career_ids, end_ids, moment_ids
+from .achievements import ACHIEVEMENTS, CAREER_IDS, career_ids, end_ids, moment_ids
 from .ai import BOT_STYLES, is_bot, wants_stop
 from .engine import TEAM_NAMES, Game, GameError
-from .history import History, chat_records, game_record, profile
+from .history import History, bank_shares, chat_records, game_record, profile
 from .winprob import chances_from_clone, sim_clone
 from .profiles import ALL_SKINS, MAPS, PERSONAL_SKINS, PUBLIC_SKINS, STAKES, Profiles
 from .rules import BUILTIN_PRESETS, RulesError, builtin_label, describe, normalize, same, short_title
@@ -55,6 +55,7 @@ class Room:
         self.manager = manager
         self.id = secrets.token_urlsafe(6).replace("-", "x").replace("_", "y")
         self.chat_id = chat_id
+        self.chat_title: str | None = None
         self.owner = owner_uid
         self.timer = 0
         self.rules = normalize(rules)
@@ -70,6 +71,7 @@ class Room:
         self._timer_token = 0
         self._last_react: dict[int, float] = {}
         self._announced: dict[int, set] = {}
+        self.rigged = False  # админ вмешивался в партию (подкрутка, счёт, болт, самосвал)
         self.snapshots: list[tuple[int, Game]] = []
         self.audit: list[dict] = []
         self.lobby_msg_id: int | None = None
@@ -266,7 +268,7 @@ class Room:
             return
 
         if action == "game_detail":
-            rec = self.manager.history.get(str(msg.get("id") or ""))
+            rec = self.manager.history.get(str(msg.get("id") or ""), include_off=admin)
             self._require(rec is not None, "партия не найдена")
             await self.send_to(ws, {"type": "game_detail", "game": rec})
             return
@@ -396,6 +398,7 @@ class Room:
             self.winprob, self.winprob_hist, self._wp_turn = {}, [], None
             self.snapshots = []
             self._announced = {}
+            self.rigged = False
             self._audit(uid, name, "start", self.preset_name())
             await self.manager.notify("game_started", self)
 
@@ -558,6 +561,7 @@ class Room:
                 if self.game.winner is not None:
                     self.manager.record(self)
                     await self._check_achievements(final=True)
+                    self.manager.archive(self)  # после ачивок и до выплаты: в запись попадают ачивки и ставки
                     await self._pay_bank(self.game.winners or [self.game.winner])
                 else:
                     self._refund()
@@ -615,12 +619,12 @@ class Room:
     async def _pay_bank(self, winners: list[int]) -> None:
         """Банк — победителю; в командной игре делится поровну между игроками команды."""
         bank = sum(self.stakes.values())
+        shares = bank_shares(self.stakes, winners)
         self.stakes = {}
-        people = [u for u in winners if not is_bot(u)]
-        if not bank or not people:
+        if not shares:
             return
-        share = bank // len(people)
-        for u in people:
+        people = list(shares)
+        for u, share in shares.items():
             self.manager.profiles.add_chips(u, share)
         names = " и ".join(self.game.player(u).name for u in people) if self.game else "?"
         await self.send_all({"type": "bank", "uid": people[0], "uids": people, "name": names, "amount": bank})
@@ -754,6 +758,19 @@ class Room:
         if op == "end":
             await self.cancel()
             return
+        if op == "games":
+            await self.send_to(ws, {"type": "admin_games", "list": self.manager.games_overview()})
+            return
+        if op in ("game_off", "game_on", "game_purge"):
+            gid = str(msg.get("id") or "")
+            try:
+                text = {"game_off": self.manager.exclude_game, "game_on": self.manager.restore_game,
+                        "game_purge": self.manager.purge_game}[op](gid)
+            except ValueError as e:
+                raise GameError(str(e)) from None
+            await self.send_to(ws, {"type": "admin_games", "list": self.manager.games_overview(), "text": text})
+            await self.manager.broadcast_all()  # фишки и ачивки могли измениться
+            return
         if op == "kick":
             await self._kick(int(msg.get("uid", 0)))
             return
@@ -769,6 +786,8 @@ class Room:
             return
 
         g = self._game()
+        if op in ("set_score", "bolt", "samosval", "force", "rig"):
+            self.rigged = True
         if op == "undo":
             self._require(self.snapshots, "нечего отменять")
             cur, started = g.turn_no, g.rolls_in_turn > 0 or g.phase != "play"
@@ -901,11 +920,127 @@ class RoomManager:
     # ---------- статистика, ачивки, пресеты ----------
 
     def record(self, room: Room) -> None:
-        if room.game and any(p.uid >= 0 for p in room.game.players):
-            self.history.add(game_record(room))
         if self.stats and room.chat_id is not None and room.game:
             people = [p for p in room.game.players if not is_bot(p.uid)]
             self.stats.record_game(room.chat_id, people, room.game.winners)
+
+    def archive(self, room: Room) -> None:
+        """Запись законченной партии в историю (после итоговых ачивок, пока ставки ещё не выплачены)."""
+        if room.game and any(not is_bot(p.uid) for p in room.game.players):
+            self.history.add(game_record(room))
+
+    # ---------- партии в админ-панели ----------
+
+    def games_overview(self) -> list[dict]:
+        titles = {g["chat"]: g["chat_title"] for g in self.history.games if g.get("chat_title")}
+        res = []
+        for g in sorted(self.history.games, key=lambda g: -g["t1"]):
+            res.append({
+                "id": g["id"], "t": g["t1"], "duration": round(g["t1"] - g["t0"]), "turns": g["turns"],
+                "chat": g.get("chat"), "chat_title": titles.get(g.get("chat")), "teams": bool(g["teams"]),
+                "off": bool(g.get("off")), "rigged": bool(g.get("rigged")),
+                "bank": sum(g.get("stakes", {}).values()),
+                "ach": sum(len(v) for v in g.get("ach", {}).values()),
+                "players": [{"uid": p["uid"], "name": p["name"], "score": p["score"], "bot": p["bot"],
+                             "won": p["uid"] in g["winners"], "best_turn": p["st"].get("best_turn", 0)}
+                            for p in sorted(g["players"], key=lambda p: (p["uid"] not in g["winners"], -p["score"]))],
+            })
+        return res
+
+    def exclude_game(self, gid: str) -> str:
+        """Партия перестаёт учитываться: счётчики чата, лучший ход, ачивки этой партии и банк откатываются.
+        Всё, что изменили, сохраняется в записи (undo), чтобы партию можно было вернуть."""
+        g = self.history.get(gid, include_off=True)
+        if g is None:
+            raise ValueError("партия не найдена")
+        if g.get("off"):
+            raise ValueError("партия уже не учитывается")
+        g["off"] = True  # дальше history.of_user/of_chat её уже не видят
+        undo: dict = {"best": {}, "ach": {}, "chips": {}}
+        humans = [p for p in g["players"] if not p["bot"]]
+        chat = g.get("chat")
+        if self.stats:
+            if chat is not None:
+                self.stats.adjust_game(chat, humans, g["winners"], -1)
+                for p in humans:
+                    row = self.stats.row(chat, p["uid"])
+                    if row and p["st"].get("best_turn", 0) >= row["best_turn"]:
+                        undo["best"][str(p["uid"])] = row["best_turn"]
+                        rest = (q["st"].get("best_turn", 0) for x in self.history.of_chat(chat)
+                                for q in x["players"] if q["uid"] == p["uid"])
+                        self.stats.set_best_turn(chat, p["uid"], max(rest, default=0))
+            for p in humans:
+                changed = self._revoke_achievements(g, p["uid"])
+                if changed:
+                    undo["ach"][str(p["uid"])] = changed
+        prof = self.profiles
+        stakes = {int(u): v for u, v in g.get("stakes", {}).items()}
+        delta = {u: v for u, v in stakes.items()}  # взносы возвращаем…
+        for u, share in bank_shares(stakes, g["winners"]).items():  # …а выигрыш забираем
+            delta[u] = delta.get(u, 0) - share
+        for u, d in delta.items():
+            if d:
+                before = prof.chips(u)
+                undo["chips"][str(u)] = prof.add_chips(u, d) - before  # фишек не бывает меньше нуля
+        g["undo"] = undo
+        self.history.save()
+        return "Партия больше не учитывается"
+
+    def _revoke_achievements(self, g: dict, uid: int) -> dict[str, float]:
+        """Ачивки игрока, полученные в партии g: переносятся на другую учитываемую партию, где они тоже выпали,
+        иначе забираются. Карьерные — забираются, если порог больше не выполнен. Возвращает {aid: старое время}."""
+        mine = self.stats.achievements(uid)
+        career = career_ids(self.stats.user_total(uid) or {})
+        changed = {}
+        for aid, ts in list(mine.items()):
+            if aid in CAREER_IDS:
+                if aid not in career:
+                    changed[aid] = ts
+                    self.stats.set_unlock(uid, aid, None)
+                continue
+            # итоговые ачивки выдаются через мгновение после записи партии — отсюда запас после t1
+            if not g["t0"] - 1 <= ts <= g["t1"] + 60:
+                continue
+            changed[aid] = ts
+            other = min((x["t1"] for x in self.history.of_user(uid) if aid in x.get("ach", {}).get(str(uid), [])),
+                        default=None)
+            self.stats.set_unlock(uid, aid, other)
+        return changed
+
+    def restore_game(self, gid: str) -> str:
+        g = self.history.get(gid, include_off=True)
+        if g is None:
+            raise ValueError("партия не найдена")
+        if not g.get("off"):
+            raise ValueError("партия и так учитывается")
+        undo = g.pop("undo", {})
+        g.pop("off")
+        humans = [p for p in g["players"] if not p["bot"]]
+        chat = g.get("chat")
+        if self.stats:
+            if chat is not None:
+                self.stats.adjust_game(chat, humans, g["winners"], 1)
+                for p in humans:
+                    row = self.stats.row(chat, p["uid"])
+                    best = max(row["best_turn"], p["st"].get("best_turn", 0), undo["best"].get(str(p["uid"]), 0))
+                    self.stats.set_best_turn(chat, p["uid"], best)
+            for u, changed in undo.get("ach", {}).items():
+                mine = self.stats.achievements(int(u))
+                for aid, ts in changed.items():
+                    self.stats.set_unlock(int(u), aid, min(ts, mine.get(aid, ts)))
+        for u, d in undo.get("chips", {}).items():
+            self.profiles.add_chips(int(u), -d)
+        self.history.save()
+        return "Партия снова учитывается"
+
+    def purge_game(self, gid: str) -> str:
+        g = self.history.get(gid, include_off=True)
+        if g is None:
+            raise ValueError("партия не найдена")
+        if not g.get("off"):
+            raise ValueError("сначала отметь партию как неучитываемую")
+        self.history.remove(gid)
+        return "Партия удалена навсегда"
 
     def profile_full(self, uid: int, viewer: int | None = None) -> dict:
         """Полный профиль: аналитика по истории + карьерная статистика, ачивки, скин, фишки."""

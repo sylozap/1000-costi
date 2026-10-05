@@ -34,6 +34,8 @@ ACHIEVEMENTS: dict[str, tuple[str, str, str]] = {
     "samosvals5": ("🚚", "Автопарк", "5 самосвалов за карьеру"),
 }
 
+CAREER_IDS = {"games10", "games50", "games100", "wins10", "samosvals5"}
+
 MOMENT_IDS = {"samosval", "five_ones", "barrel_zero", "large_straight", "turn300", "hot3", "pit_one_roll",
               "barrel_first_try", "bolts3", "burned300", "overtaken3"}
 

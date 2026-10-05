@@ -231,6 +231,7 @@ def build_router(manager: RoomManager, stats: Stats, notifier: GroupNotifier, pr
             return
         name = display_name(user.model_dump())
         room = manager.create(message.chat.id, user.id, name)
+        room.chat_title = message.chat.title
         code = (command.args or "").strip().removeprefix("p_")
         if code:
             try:
