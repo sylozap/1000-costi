@@ -16,7 +16,8 @@ from .ai import BOT_STYLES, is_bot, wants_stop
 from .engine import TEAM_NAMES, Game, GameError
 from .history import History, bank_shares, chat_records, game_record, profile
 from .winprob import chances_from_clone, sim_clone
-from .profiles import ALL_SKINS, MAPS, PERSONAL_SKINS, PUBLIC_SKINS, STAKES, Profiles
+from .customdice import CustomDice, CustomDiceError, dice_id
+from .profiles import ALL_SKINS, MAPS, PUBLIC_SKINS, STAKES, Profiles
 from .rules import BUILTIN_PRESETS, RulesError, builtin_label, describe, normalize, same, short_title
 
 if TYPE_CHECKING:
@@ -42,6 +43,8 @@ STICKERS = {
 }
 GAME_ACTIONS = {"roll", "stop", "order_roll", "order_roll_all"}
 MAX_SNAPSHOTS = 40
+# админ-команды, которым не нужна комната (работают и с экрана «нет игры»)
+ADMIN_GLOBAL_OPS = {"grant_skin", "dice_list", "dice_save", "dice_delete"}
 BOT_DELAY = (1.6, 2.6)  # сек между действиями бота: успевает проиграться анимация броска
 
 
@@ -122,6 +125,7 @@ class Room:
         prefs = self.manager.admin_prefs
         prof = self.manager.profiles
         people = [u for u in players | set(self.members) if not is_bot(u)]
+        skins = {str(u): self.skin_of(u) for u in players | set(self.members)}
         return {
             "id": self.id,
             "status": self.status,
@@ -144,8 +148,9 @@ class Room:
             "cosmetics": {
                 "gold": [u for u in config.ADMIN_IDS if prefs.get(u, {}).get("gold", True)],
                 "badge": [u for u in config.ADMIN_IDS if prefs.get(u, {}).get("badge", True)],
-                "skins": {str(u): self.skin_of(u) for u in players | set(self.members)},
+                "skins": skins,
             },
+            "custom_dice": self.manager.custom_views(skins.values()),
             "chips": {str(u): prof.chips(u) for u in people},
             "bank": sum(self.stakes.values()),
             "bots": {str(u): s for u, s in self.bots.items()},
@@ -734,14 +739,8 @@ class Room:
             self.manager.save_admin_prefs()
             await self.manager.broadcast_all()
             return
-        if op == "grant_skin":
-            target, skin = int(msg.get("uid", 0)), str(msg.get("skin") or "")
-            try:
-                self.manager.profiles.grant(target, skin, bool(msg.get("on", True)))
-            except ValueError as e:
-                raise GameError(str(e)) from None
-            await self.send_to(ws, {"type": "admin_ok", "text": f"Скин «{PERSONAL_SKINS[skin]}»: "
-                                                                f"{'выдан' if msg.get('on', True) else 'забран'}"})
+        if op in ADMIN_GLOBAL_OPS:
+            await self.manager.admin_global(uid, msg, lambda obj: self.send_to(ws, obj))
             await self.manager.broadcast_all()
             return
         if op == "chips":
@@ -871,7 +870,8 @@ class RoomManager:
         self.notifier = None  # объект с async-методами lobby_update/game_started/...
         self.bot_username: str | None = None
         self.admin_prefs: dict[int, dict] = self._load_admin_prefs()
-        self.profiles = Profiles(data_dir / "profiles.json" if data_dir else None)
+        self.custom = CustomDice(data_dir / "dice" if data_dir else None)
+        self.profiles = Profiles(data_dir / "profiles.json" if data_dir else None, custom=self.custom)
         self.history = History(data_dir / "games.jsonl" if data_dir else None)
 
     # ---------- комнаты ----------
@@ -1052,6 +1052,7 @@ class RoomManager:
         return {"type": "profile_full", **profile(self.history, uid, viewer),
                 "name": (total or {}).get("name") or self._name_of(uid),
                 "career": total, "chips": self.profiles.chips(uid), "skin": self.profiles.skin(uid, admin, gold),
+                "custom_dice": self.custom_views([self.profiles.skin(uid, admin, gold)]),
                 "achievements": [a for a in ach if a["got"]], "achievements_total": len(ach)}
 
     def _name_of(self, uid: int) -> str:
@@ -1066,8 +1067,82 @@ class RoomManager:
         admin = is_admin(uid)
         allowed = self.profiles.allowed_skins(uid, admin)
         gold = self.admin_prefs.get(uid, {}).get("gold", True)
+        skins = []
+        for k in allowed:
+            item = {"id": k, "name": self.skin_name(k), "personal": k not in PUBLIC_SKINS}
+            if dice_id(k):
+                item["img"] = self.custom.view(dice_id(k))["faces"][0]
+            skins.append(item)
         return {"type": "profile", "chips": self.profiles.chips(uid), "skin": self.profiles.skin(uid, admin, gold),
-                "skins": [{"id": k, "name": ALL_SKINS[k], "personal": k not in PUBLIC_SKINS} for k in allowed]}
+                "skins": skins, "custom_dice": self.custom_views(allowed)}
+
+    # ---------- кубики с картинками ----------
+
+    def skin_name(self, skin: str) -> str:
+        return self.custom.name(skin) if dice_id(skin) else ALL_SKINS.get(skin, skin)
+
+    def custom_views(self, skins) -> dict[str, dict]:
+        """Описание кубиков с картинками для клиента (скин → адреса граней)."""
+        return {s: self.custom.view(dice_id(s)) for s in set(skins) if dice_id(s) and self.custom.exists(s)}
+
+    def known_people(self) -> dict[int, str]:
+        """Все известные игроки (для выдачи кубиков): из статистики, истории и комнат."""
+        people: dict[int, str] = {}
+        if self.stats:
+            for chat in self.stats.data["chats"].values():
+                for uid, row in chat.items():
+                    people[int(uid)] = row.get("name") or people.get(int(uid), "")
+        for g in self.history.games:
+            for p in g["players"]:
+                if not p.get("bot"):
+                    people[p["uid"]] = p["name"]
+        for r in self.rooms.values():
+            for uid, name in r.members.items():
+                if uid >= 0:
+                    people[uid] = name
+        for uid in self.profiles.data["users"]:
+            people.setdefault(int(uid), f"id {uid}")
+        return people
+
+    def dice_admin_msg(self) -> dict:
+        people = self.known_people()
+        items = []
+        for v in self.custom.list():
+            owners = self.profiles.owners(v["skin"])
+            items.append(dict(v, owners=[{"uid": u, "name": people.get(u, f"id {u}")} for u in owners]))
+        return {"type": "admin_dice", "list": items,
+                "people": sorted(({"uid": u, "name": n} for u, n in people.items()), key=lambda x: x["name"].lower())}
+
+    async def admin_global(self, uid: int, msg: dict, reply) -> None:
+        """Админ-команды без привязки к комнате: кубики с картинками и выдача личных скинов."""
+        op = msg.get("op")
+        try:
+            if op == "dice_list":
+                await reply(self.dice_admin_msg())
+                return
+            if op == "dice_save":
+                did = msg.get("id") or None
+                did = self.custom.save(did, msg.get("name"), msg.get("faces"), uid)
+                await reply({"type": "admin_ok", "text": f"Кубик «{self.custom.dice[did]['name']}» сохранён"})
+                await reply(dict(self.dice_admin_msg(), saved=did))
+            elif op == "dice_delete":
+                did = str(msg.get("id") or "")
+                name = self.custom.dice.get(did, {}).get("name", "?")
+                self.custom.delete(did)
+                self.profiles.revoke_all("c_" + did)
+                await reply({"type": "admin_ok", "text": f"Кубик «{name}» удалён и забран у всех"})
+                await reply(self.dice_admin_msg())
+            elif op == "grant_skin":
+                target, skin, on = int(msg.get("uid", 0)), str(msg.get("skin") or ""), bool(msg.get("on", True))
+                self.profiles.grant(target, skin, on)
+                await reply({"type": "admin_ok", "text": f"«{self.skin_name(skin)}»: {'выдан' if on else 'забран'}"})
+                if dice_id(skin):
+                    await reply(self.dice_admin_msg())
+            else:
+                return
+        except (CustomDiceError, ValueError) as e:
+            raise GameError(str(e)) from None
+        await self.broadcast_all()
 
     def achievements_of(self, uid: int) -> list[dict]:
         mine = self.stats.achievements(uid) if self.stats else {}

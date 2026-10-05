@@ -8,8 +8,9 @@ from aiohttp import WSMsgType, web
 
 from . import config
 from .auth import display_name, validate_init_data
+from .customdice import ID_RE
 from .engine import GameError
-from .rooms import RoomManager, is_admin
+from .rooms import ADMIN_GLOBAL_OPS, RoomManager, is_admin
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def create_app(manager: RoomManager) -> web.Application:
         return resp
 
     async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(heartbeat=25)
+        ws = web.WebSocketResponse(heartbeat=25, max_msg_size=8 * 1024 * 1024)  # картинки граней кубиков
         await ws.prepare(request)
         uid: int | None = None
         name = ""
@@ -75,6 +76,12 @@ def create_app(manager: RoomManager) -> web.Application:
                     # список комнат доступен админу и без входа в комнату
                     await ws.send_json({"type": "admin_rooms", "list": manager.rooms_overview()})
                     continue
+                if kind == "admin" and data.get("op") in ADMIN_GLOBAL_OPS and is_admin(uid) and room is None:
+                    try:
+                        await manager.admin_global(uid, data, ws.send_json)
+                    except GameError as e:
+                        await ws.send_json({"type": "error", "message": str(e)})
+                    continue
                 if uid is None or room is None:
                     await ws.send_json({"type": "error", "message": "нет подключения к игре"})
                     continue
@@ -90,7 +97,22 @@ def create_app(manager: RoomManager) -> web.Application:
                 await room.detach(ws)
         return ws
 
+    async def dice_face(request: web.Request) -> web.StreamResponse:
+        """Картинка грани кубика: /dice/<id>/<1..6>?v=<версия> (версия в адресе — можно кэшировать надолго)."""
+        did = request.match_info["did"]
+        try:
+            n = int(request.match_info["n"])
+        except ValueError:
+            raise web.HTTPNotFound() from None
+        path = manager.custom.face_path(did, n) if ID_RE.match(did) else None
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        resp = web.FileResponse(path)
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
     app.router.add_get("/", index)
+    app.router.add_get("/dice/{did}/{n}", dice_face)
     app.router.add_get("/ws", ws_handler)
     app.router.add_static("/static/", config.WEBAPP_DIR)
 

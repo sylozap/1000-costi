@@ -51,8 +51,9 @@ def _today() -> str:
 
 
 class Profiles:
-    def __init__(self, path: Path | None):
+    def __init__(self, path: Path | None, custom=None):
         self.path = path
+        self.custom = custom  # game.customdice.CustomDice — кубики с картинками (личные скины «c_…»)
         self.data = _load(path) if path else {}
         self.data.setdefault("users", {})
 
@@ -70,8 +71,11 @@ class Profiles:
 
     # ---------- скины ----------
 
+    def _personal(self, skin: str) -> bool:
+        return skin in PERSONAL_SKINS or bool(self.custom and self.custom.exists(skin))
+
     def allowed_skins(self, uid: int, admin: bool = False) -> list[str]:
-        res = list(PUBLIC_SKINS) + [s for s in self._user(uid)["grants"] if s in PERSONAL_SKINS]
+        res = list(PUBLIC_SKINS) + [s for s in self._user(uid)["grants"] if self._personal(s)]
         if admin and "gold" not in res:
             res.append("gold")
         return res
@@ -83,7 +87,7 @@ class Profiles:
             return u["skin"]
         if admin and admin_gold:
             return "gold"
-        personal = [s for s in u["grants"] if s in PERSONAL_SKINS]
+        personal = [s for s in u["grants"] if self._personal(s)]
         return personal[0] if personal else "ivory"
 
     def set_skin(self, uid: int, skin: str, admin: bool = False) -> None:
@@ -93,7 +97,7 @@ class Profiles:
         self._save()
 
     def grant(self, uid: int, skin: str, on: bool) -> None:
-        if skin not in PERSONAL_SKINS:
+        if not self._personal(skin):
             raise ValueError("выдавать можно только личные скины")
         u = self._user(uid)
         if on and skin not in u["grants"]:
@@ -101,6 +105,18 @@ class Profiles:
             u["skin"] = skin
         elif not on and skin in u["grants"]:
             u["grants"].remove(skin)
+        self._save()
+
+    def owners(self, skin: str) -> list[int]:
+        return [int(uid) for uid, u in self.data["users"].items() if skin in u.get("grants", [])]
+
+    def revoke_all(self, skin: str) -> None:
+        """Скин удалён: забрать у всех; кто им пользовался — вернётся к обычным кубикам."""
+        for u in self.data["users"].values():
+            if skin in u.get("grants", []):
+                u["grants"].remove(skin)
+            if u.get("skin") == skin:
+                u.pop("skin")
         self._save()
 
     # ---------- фишки ----------
