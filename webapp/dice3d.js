@@ -159,6 +159,60 @@ export function faceCanvas(v, skin = 'ivory') {
   return c;
 }
 
+/**
+ * Грань кубика с картинкой: картинка на всю грань (обрезка по центру), значение — бейдж с точками в углу.
+ * img — загруженная картинка или null (серая заглушка, пока грузится).
+ */
+export function customFaceCanvas(img, v) {
+  const s = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  g.fillStyle = '#e9e9ec';
+  g.fillRect(0, 0, s, s);
+  if (img) {
+    const k = Math.max(s / img.naturalWidth, s / img.naturalHeight);
+    const w = img.naturalWidth * k, h = img.naturalHeight * k;
+    g.drawImage(img, (s - w) / 2, (s - h) / 2, w, h);
+  }
+  // мягкая рамка по краю, чтобы скругления кубика не резали картинку грубо
+  const edge = g.createRadialGradient(s / 2, s / 2, s * 0.45, s / 2, s / 2, s * 0.75);
+  edge.addColorStop(0, 'rgba(0,0,0,0)');
+  edge.addColorStop(1, 'rgba(0,0,0,0.28)');
+  g.fillStyle = edge;
+  g.fillRect(0, 0, s, s);
+  // бейдж со значением в правом нижнем углу
+  const b = 78, x0 = s - b - 14, y0 = s - b - 14, r = 16;
+  g.save();
+  g.shadowColor = 'rgba(0,0,0,0.35)';
+  g.shadowBlur = 8;
+  g.fillStyle = 'rgba(255,255,255,0.94)';
+  g.beginPath();
+  g.moveTo(x0 + r, y0);
+  g.arcTo(x0 + b, y0, x0 + b, y0 + b, r);
+  g.arcTo(x0 + b, y0 + b, x0, y0 + b, r);
+  g.arcTo(x0, y0 + b, x0, y0, r);
+  g.arcTo(x0, y0, x0 + b, y0, r);
+  g.fill();
+  g.restore();
+  for (const [px, py] of PIPS[v]) {
+    g.fillStyle = v === 1 ? '#d23b3e' : '#16171a';
+    g.beginPath();
+    g.arc(x0 + 6 + px * (b - 12), y0 + 6 + py * (b - 12), v === 1 ? 11 : 7.5, 0, Math.PI * 2);
+    g.fill();
+  }
+  return c;
+}
+
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
 function faceTexture(v, renderer, skin = 'ivory') {
   const tex = new THREE.CanvasTexture(faceCanvas(v, skin));
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -422,21 +476,44 @@ export class DiceTable {
 
   /** Скин кубиков (см. SKINS): обычные, золотые, розовые и т.д. */
   setSkin(name) {
-    if (!SKINS[name] || name === this.skin) return;
+    this.wantSkin = name;
+    const custom = name?.startsWith('c_');
+    if ((!custom && !SKINS[name]) || name === this.skin) return;
+    if (custom && !this.skinTextures[name]) return; // ещё грузится — применится по готовности
     if (!this.skinTextures[name]) {
       this.skinTextures[name] = FACE_ORDER.map((v) => faceTexture(v, this.renderer, name));
     }
     const tex = this.skinTextures[name];
+    const look = custom ? { metal: 0, rough: 0.45 } : SKINS[name];
     for (const d of this.dice) {
       d.mats.forEach((m, i) => {
         m.map = tex[i];
-        m.metalness = SKINS[name].metal;
-        m.roughness = SKINS[name].rough;
+        m.metalness = look.metal;
+        m.roughness = look.rough;
         m.needsUpdate = true;
       });
     }
     this.skin = name;
     this.dirty = true;
+  }
+
+  /** Кубик с картинками: view = { skin, ver, faces: [адреса граней 1..6] }. Загружается заранее. */
+  async defineCustomSkin(view) {
+    this.customVer ||= {};
+    if (this.customVer[view.skin] === view.ver) return;
+    this.customVer[view.skin] = view.ver;
+    const imgs = await Promise.all(view.faces.map(loadImage));
+    if (this.customVer[view.skin] !== view.ver) return; // пока грузили, кубик обновили
+    const tex = FACE_ORDER.map((v) => {
+      const t = new THREE.CanvasTexture(customFaceCanvas(imgs[v - 1], v));
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      return t;
+    });
+    this.skinTextures[view.skin]?.forEach((t) => t.dispose());
+    this.skinTextures[view.skin] = tex;
+    if (this.skin === view.skin) this.skin = null; // перерисовать обновлённые грани
+    if (this.wantSkin === view.skin) this.setSkin(view.skin);
   }
 
   _resize() {

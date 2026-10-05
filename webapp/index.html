@@ -6,7 +6,7 @@
   <title>1000 — кости</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/theme.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=5">
+  <link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body>
   <div id="app">
@@ -334,6 +334,7 @@
         <button data-tab="rooms">Комнаты</button>
         <button data-tab="games">Партии</button>
         <button data-tab="log">Лог</button>
+        <button data-tab="dice">Кубики</button>
         <button data-tab="style">Стиль</button>
       </div>
       <div class="tab" data-tab="game">
@@ -370,6 +371,11 @@
       <div class="tab hidden" data-tab="log">
         <button class="btn secondary" id="admLogRefresh">Обновить</button>
         <ul class="audit" id="admLog"></ul>
+      </div>
+      <div class="tab hidden" data-tab="dice">
+        <button class="btn primary" id="admDiceNew">＋ Новый кубик с картинками</button>
+        <div class="list card flat" id="admDiceList"></div>
+        <p class="note">Картинки обрезаются до квадрата и сжимаются на телефоне. Значение грани показывается бейджем в углу.</p>
       </div>
       <div class="tab hidden" data-tab="style">
         <label class="row"><span class="row-label">Золотые кубики на моих бросках</span><input type="checkbox" class="switch" id="admGold"></label>
@@ -434,6 +440,8 @@
           <button class="btn secondary" data-revoke="pink">Забрать 🌸</button>
           <button class="btn secondary" data-revoke="gold">Забрать ✨</button>
         </div>
+        <div class="field-label">Кубики с картинками</div>
+        <div class="list card flat" id="pmCustom"></div>
       </div>
       <div class="row-btns">
         <button class="btn secondary" id="pmProfileBtn">👤 Профиль</button>
@@ -442,8 +450,30 @@
     </div>
   </div>
 
+  <!-- админ: редактор кубика с картинками -->
+  <div id="diceModal" class="modal hidden">
+    <div class="modal-card tall">
+      <div class="grabber"></div>
+      <h2 id="deTitle">Новый кубик</h2>
+      <div class="cube-stage"><div class="cube" id="deCube"></div></div>
+      <input class="input" id="deName" maxlength="30" placeholder="Название, например «Котики»">
+      <div class="field-label">Грани: тап — выбрать картинку. Пустые грани берут картинку первой заполненной.</div>
+      <div class="face-grid" id="deFaces"></div>
+      <input type="file" id="deFile" accept="image/*" hidden>
+      <div class="row-btns">
+        <button class="btn danger hidden" id="deDelete">Удалить</button>
+        <button class="btn primary grow" id="deSave">Сохранить</button>
+      </div>
+      <div id="deOwnersBox" class="hidden">
+        <div class="field-label">Кому выдан</div>
+        <input class="input" id="deSearch" placeholder="Поиск игрока">
+        <div class="list card flat" id="deOwners"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="errorToast" class="error-toast hidden"></div>
 
-  <script type="module" src="/static/app.js?v=7"></script>
+  <script type="module" src="/static/app.js?v=8"></script>
 </body>
 </html>
