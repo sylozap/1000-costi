@@ -332,6 +332,7 @@
       <div class="segmented tabs" id="adminTabs">
         <button data-tab="game" class="on">Игра</button>
         <button data-tab="rooms">Комнаты</button>
+        <button data-tab="games">Партии</button>
         <button data-tab="log">Лог</button>
         <button data-tab="style">Стиль</button>
       </div>
@@ -356,6 +357,15 @@
       <div class="tab hidden" data-tab="rooms">
         <button class="btn secondary" id="admRoomsRefresh">Обновить</button>
         <div id="admRooms"></div>
+      </div>
+      <div class="tab hidden" data-tab="games">
+        <div class="segmented" id="admGamesFilter">
+          <button data-f="here" class="on">Этот чат</button>
+          <button data-f="all">Все</button>
+          <button data-f="off">Корзина</button>
+        </div>
+        <p class="note" id="admGamesNote"></p>
+        <div id="admGames"></div>
       </div>
       <div class="tab hidden" data-tab="log">
         <button class="btn secondary" id="admLogRefresh">Обновить</button>

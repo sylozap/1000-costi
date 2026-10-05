@@ -522,3 +522,19 @@ button.row:active, .player-row.tappable:active { background: var(--surface-2); }
   .pscore { font-size: 19px; }
   .btn.big { min-height: 52px; font-size: 16px; }
 }
+
+/* админ: партии */
+#admGamesFilter { margin-bottom: 8px; }
+.adm-game { border: 1px solid var(--line); border-radius: 14px; margin-top: 8px; overflow: hidden; }
+.adm-game.off { opacity: .75; border-style: dashed; }
+.adm-game.open { opacity: 1; }
+.adm-game-head { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--text); padding: 10px 12px; font: inherit; }
+.adm-game-top { display: flex; justify-content: space-between; gap: 8px; }
+.adm-game-top .muted { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-game-head .small { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.adm-game-body { padding: 0 12px 12px; border-top: 1px solid var(--line); }
+.adm-game-body .note { margin: 8px 0; }
+.adm-game-players > div { display: grid; grid-template-columns: 1fr auto 48px; gap: 8px; padding: 4px 0; font-size: 14px; }
+.adm-game-players b { text-align: right; font-variant-numeric: tabular-nums; }
+.adm-game-players .muted { font-size: 12px; }
+.adm-game-body .row-btns { margin-top: 10px; }

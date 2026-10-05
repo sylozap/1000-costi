@@ -759,7 +759,7 @@ class Room:
             await self.cancel()
             return
         if op == "games":
-            await self.send_to(ws, {"type": "admin_games", "list": self.manager.games_overview()})
+            await self.send_to(ws, {"type": "admin_games", "list": self.manager.games_overview(), "here": self.chat_id})
             return
         if op in ("game_off", "game_on", "game_purge"):
             gid = str(msg.get("id") or "")
@@ -768,7 +768,8 @@ class Room:
                         "game_purge": self.manager.purge_game}[op](gid)
             except ValueError as e:
                 raise GameError(str(e)) from None
-            await self.send_to(ws, {"type": "admin_games", "list": self.manager.games_overview(), "text": text})
+            await self.send_to(ws, {"type": "admin_games", "list": self.manager.games_overview(), "here": self.chat_id,
+                                    "text": text})
             await self.manager.broadcast_all()  # фишки и ачивки могли измениться
             return
         if op == "kick":
