@@ -14,8 +14,8 @@ async def win_game(room, w1, w2, admin_ws=None):
     await room.handle(1, "Вася", {"type": "order_roll"}, w1)
     push_dice(room.game, 1, 1, 2, 2, 3)
     await room.handle(2, "Петя", {"type": "order_roll"}, w2)
-    if admin_ws:  # вмешательство админа (счёт без изменений) — партия помечается 🎯
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "set_score", "uid": 2, "score": 0}, admin_ws)
+    if admin_ws:  # админ меняет правила посреди партии — партия помечается 🎯
+        await room.handle(ADMIN, "Админ", {"type": "rules", "rules": dict(room.rules)}, admin_ws)
     push_dice(room.game, 1, 1, 1, 1, 1)
     await room.handle(1, "Вася", {"type": "roll"}, w1)
     assert room.status == "finished"

@@ -340,7 +340,6 @@
       <div class="tab" data-tab="game">
         <div class="row-btns">
           <button class="btn secondary" id="admPauseBtn">⏸ Пауза</button>
-          <button class="btn secondary" id="admUndoBtn">↩️ Отменить ход</button>
         </div>
         <div class="row-btns">
           <button class="btn secondary" id="admRulesBtn">⚙️ Правила</button>
@@ -389,16 +388,7 @@
     <div class="modal-card tall admin">
       <div class="grabber"></div>
       <h2 id="pmName"></h2>
-      <div class="field-label">Счёт</div>
-      <div class="force-row">
-        <input class="input" id="pmScore" type="number" step="5" inputmode="numeric">
-        <button class="btn secondary" id="pmScoreBtn">✓</button>
-      </div>
-      <div class="row-btns three">
-        <button class="btn secondary" id="pmBoltBtn">🔩 Болт</button>
-        <button class="btn secondary" id="pmTruckBtn">🚛 Самосвал</button>
-        <button class="btn danger" id="pmKickBtn">✕ Исключить</button>
-      </div>
+      <button class="btn danger" id="pmKickBtn">✕ Исключить из игры</button>
       <div class="pm-human" id="pmHuman">
         <div class="field-label">Фишки</div>
         <div class="force-row">
@@ -448,6 +438,6 @@
 
   <div id="errorToast" class="error-toast hidden"></div>
 
-  <script type="module" src="/static/app.js?v=9"></script>
+  <script type="module" src="/static/app.js?v=10"></script>
 </body>
 </html>

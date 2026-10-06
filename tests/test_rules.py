@@ -299,28 +299,10 @@ def test_roll_limit_burns_without_bolt():
     assert g.player(1).score == 0 and g.player(1).bolts == 0 and g.cur.uid == 2
 
 
-# ---------- админ ----------
-
-def test_admin_set_score_and_barrel():
-    g, rng = make({"barrel": "points"})
-    g.admin_set_score(2, 900)
-    assert g.player(2).on_barrel and g.player(2).opened
-    g.admin_set_score(2, 100)
-    assert not g.player(2).on_barrel
-
-
-def test_snapshot_restore():
-    g, rng = make()
-    snap = g.snapshot()
-    setp(g, 1, score=100, opened=True)
-    turn(g, rng, (1, 1, 1, 2, 3))
-    seq = g._ev_seq
-    g.restore_from(snap)
-    assert g.player(1).score == 0 and g.cur.uid == 1 and g._ev_seq == seq and g.last_roll is None
-
+# ---------- правила посреди партии ----------
 
 def test_set_rules_midgame_drops_barrel():
     g, rng = make({"barrel": "points"})
-    g.admin_set_score(1, 900)
+    setp(g, 1, score=900, opened=True, on_barrel=True)
     g.set_rules({"barrel": "none"})
     assert not g.player(1).on_barrel

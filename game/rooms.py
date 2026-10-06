@@ -42,7 +42,6 @@ STICKERS = {
     "risk": ("🎲", "РИСКНИ!"),
 }
 GAME_ACTIONS = {"roll", "stop", "order_roll", "order_roll_all"}
-MAX_SNAPSHOTS = 40
 # админ-команды, которым не нужна комната (работают и с экрана «нет игры»)
 ADMIN_GLOBAL_OPS = {"grant_skin", "dice_list", "dice_save", "dice_delete"}
 BOT_DELAY = (1.6, 2.6)  # сек между действиями бота: успевает проиграться анимация броска
@@ -74,8 +73,7 @@ class Room:
         self._timer_token = 0
         self._last_react: dict[int, float] = {}
         self._announced: dict[int, set] = {}
-        self.rigged = False  # админ вмешивался в партию (счёт, болт, самосвал)
-        self.snapshots: list[tuple[int, Game]] = []
+        self.rigged = False  # админ вмешивался в партию (менял правила посреди игры)
         self.audit: list[dict] = []
         self.lobby_msg_id: int | None = None
         self.map = "felt"
@@ -354,6 +352,8 @@ class Room:
                 self._require(not stake or not self.bots, "с ботами играем без ставок")
                 self.stake = stake
             if "barrel" in msg:
+                if self.status == "game":
+                    self.rigged = True  # бочку посреди партии меняет только админ
                 rules = dict(self.rules, barrel=msg["barrel"])
                 if msg["barrel"] == "knock" and self.rules["barrel"] != "knock":
                     rules["barrel_start"] = 850
@@ -365,6 +365,9 @@ class Room:
         elif action == "rules":
             self._require((is_owner and self.status == "lobby") or admin, "правила меняет создатель в лобби")
             self._set_rules(msg.get("rules"))
+            if self.status == "game":
+                self.rigged = True
+                self._schedule_winprob(force=True)
             self._audit(uid, name, "rules", "правила изменены")
             await self.manager.notify("lobby_update", self)
 
@@ -396,7 +399,6 @@ class Room:
             self.status = "game"
             self.started_at = time.time()
             self.winprob, self.winprob_hist, self._wp_turn = {}, [], None
-            self.snapshots = []
             self._announced = {}
             self.rigged = False
             self._audit(uid, name, "start", self.preset_name())
@@ -404,7 +406,6 @@ class Room:
 
         elif action in GAME_ACTIONS:
             g = self._game()
-            self._snapshot()
             if action == "order_roll":
                 events = g.order_roll(uid)
             elif action == "order_roll_all":
@@ -499,17 +500,6 @@ class Room:
         if self.status != "game" or not self.game:
             raise GameError("игра не идёт")
         return self.game
-
-    def _snapshot(self) -> None:
-        """Снимок перед первым действием хода — для «отменить последний ход»."""
-        g = self.game
-        if not g or g.phase != "play" or g.rolls_in_turn:
-            return
-        if self.snapshots and self.snapshots[-1][0] == g.turn_no:
-            return
-        self.snapshots.append((g.turn_no, g.snapshot()))
-        if len(self.snapshots) > MAX_SNAPSHOTS:
-            self.snapshots.pop(0)
 
     def _audit_events(self, uid: int, name: str, action: str, events: list[dict]) -> None:
         g = self.game
@@ -665,7 +655,6 @@ class Room:
                 action = "order_roll"
             elif g.phase == "play" and is_bot(g.cur.uid):
                 bot = g.cur
-                self._snapshot()
                 stop = g.rolls_in_turn > 0 and wants_stop(g, self.bots.get(bot.uid, "balanced"))
                 events = g.stop(bot.uid) if stop else g.roll(bot.uid)
                 action = "stop" if stop else "roll"
@@ -780,27 +769,8 @@ class Room:
             await self.broadcast()
             return
 
-        g = self._game()
-        if op in ("set_score", "bolt", "samosval"):
-            self.rigged = True
-        if op == "undo":
-            self._require(self.snapshots, "нечего отменять")
-            cur, started = g.turn_no, g.rolls_in_turn > 0 or g.phase != "play"
-            while self.snapshots and self.snapshots[-1][0] == cur and not started:
-                self.snapshots.pop()
-            self._require(self.snapshots, "нечего отменять")
-            _, snap = self.snapshots.pop()
-            g.restore_from(snap)
-        elif op == "set_score":
-            g.admin_set_score(int(msg.get("uid", 0)), int(msg.get("score", 0)))
-        elif op == "bolt":
-            events = g.admin_bolt(int(msg.get("uid", 0)))
-        elif op == "samosval":
-            events = g.admin_samosval(int(msg.get("uid", 0)))
-        else:
-            raise GameError("неизвестная команда")
-        await self._after(events)
-        self._schedule_winprob(force=True)  # счёт поменялся вручную — шансы пересчитываем
+        # счёт, болты, самосвал и отмену хода админ менять не может — только честная игра
+        raise GameError("неизвестная команда")
 
     # ---------- таймер ----------
 
@@ -829,7 +799,6 @@ class Room:
             return
         self._timer_task = None
         try:
-            self._snapshot()
             events = self.game.timeout()
             self._audit(0, "таймер", "timeout", "; ".join(e["text"] for e in events)[:300])
             await self._after(events)

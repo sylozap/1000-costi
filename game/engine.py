@@ -1,7 +1,6 @@
 """Правила игры «1000» в кости. Чистая логика без сети; все числа берутся из словаря правил."""
 from __future__ import annotations
 
-import copy
 import itertools
 import json
 import random
@@ -699,52 +698,6 @@ class Game:
             if was_current:
                 self._reset_turn()
         return self._new_events
-
-    # ---------- вмешательство администратора (без записей в общий журнал) ----------
-
-    def admin_set_score(self, uid: int, value: int) -> None:
-        p = self.player(uid)
-        value = int(value)
-        p.score = max(0, value)
-        p.debt = max(0, -value)  # отрицательное значение = долг
-        if p.score > 0:
-            p.opened = True
-        start = self.rules["barrel_start"]
-        if self.barrel_mode:
-            if p.score >= start and not p.on_barrel:
-                p.on_barrel, p.barrel_attempts = True, 0
-            elif p.score < start:
-                p.on_barrel, p.barrel_attempts = False, 0
-        if self.phase == "play" and self.cur is p and self.rolls_in_turn == 0:
-            self.turn_start_score = p.score
-
-    def admin_bolt(self, uid: int) -> list[dict]:
-        self._begin()
-        self._add_bolt(self.player(uid))
-        return self._new_events
-
-    def admin_samosval(self, uid: int) -> list[dict]:
-        self._begin()
-        p = self.player(uid)
-        r = self.rules
-        if r["samosval_on"]:
-            self._set_score(p, r["samosval"])
-        else:
-            p.st["samosvals"] += 1
-            self._ev("samosval", f"🚛 САМОСВАЛ! {p.name} — счёт обнулён", p.uid)
-            self._set_score(p, 0)
-        return self._new_events
-
-    def snapshot(self) -> Game:
-        """Копия партии для отмены хода (генератор случайных чисел общий)."""
-        return copy.deepcopy(self, {id(self.rng): self.rng})
-
-    def restore_from(self, snap: Game) -> None:
-        """Возвращает партию к снимку, сохраняя сквозные счётчики событий и бросков."""
-        ev_seq, roll_seq = self._ev_seq, self.roll_seq
-        self.__dict__.update(snap.snapshot().__dict__)
-        self._ev_seq, self.roll_seq = ev_seq, roll_seq
-        self.last_roll = None
 
     # ---------- сериализация ----------
 

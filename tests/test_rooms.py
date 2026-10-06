@@ -87,7 +87,7 @@ def test_admin_requires_rights(tmp_path):
     run(go())
 
 
-def test_admin_spectate_pause_force_undo(tmp_path):
+def test_admin_spectate_pause(tmp_path):
     async def go():
         m, room = setup(tmp_path)
         w1, w2, wa = FakeWs(), FakeWs(), FakeWs()
@@ -107,13 +107,6 @@ def test_admin_spectate_pause_force_undo(tmp_path):
         await room.handle(1, "Вася", {"type": "stop"}, w1)
         assert room.game.player(1).score == 100 and room.game.cur.uid == 2
 
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "undo"}, wa)
-        assert room.game.player(1).score == 0 and room.game.cur.uid == 1
-
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "set_score", "uid": 2, "score": 495}, wa)
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "samosval", "uid": 2}, wa)
-        assert room.game.player(2).score == 0
-
         await room.handle(ADMIN, "Админ", {"type": "admin", "op": "audit"}, wa)
         assert wa.last("admin_audit")["list"]
         await room.handle(ADMIN, "Админ", {"type": "admin", "op": "announce", "text": "Привет"}, wa)
@@ -123,19 +116,27 @@ def test_admin_spectate_pause_force_undo(tmp_path):
     run(go())
 
 
-def test_no_rigging_ops(tmp_path):
-    """Подкрутки бросков нет: старые админ-команды отвергаются, в состоянии ничего скрытого."""
+def test_no_admin_influence_ops(tmp_path):
+    """Админ не влияет на ход игры: подкрутка, счёт, болт, самосвал и отмена хода отвергаются."""
     async def go():
         m, room = setup(tmp_path)
         w1, w2, wa = FakeWs(), FakeWs(), FakeWs()
         await start_game(room, w1, w2)
         await room.attach(wa, ADMIN, "Админ", spectate=True)
+        before = (room.game.player(1).score, room.game.player(2).score, room.game.cur.uid)
         for op in ({"op": "force", "dice": [1, 1, 1, 1, 1]}, {"op": "rig", "uid": 1, "mode": "good"},
-                   {"op": "unrig", "uid": 1}):
+                   {"op": "unrig", "uid": 1}, {"op": "set_score", "uid": 2, "score": 900},
+                   {"op": "bolt", "uid": 1}, {"op": "samosval", "uid": 2}, {"op": "undo"}):
             with pytest.raises(GameError, match="неизвестная команда"):
                 await room.handle(ADMIN, "Админ", {"type": "admin", **op}, wa)
+        assert (room.game.player(1).score, room.game.player(2).score, room.game.cur.uid) == before
+        assert room.game.player(1).bolts == 0 and not room.rigged
         assert "rigs" not in wa.last("state")["state"]
-        assert not hasattr(room.game, "force_next") and not hasattr(room.game, "rig")
+        for attr in ("force_next", "rig", "admin_set_score", "admin_bolt", "admin_samosval", "restore_from"):
+            assert not hasattr(room.game, attr)
+        # смена правил посреди партии остаётся, но партия помечается как партия с вмешательством
+        await room.handle(ADMIN, "Админ", {"type": "rules", "rules": dict(room.rules, open_min=0)}, wa)
+        assert room.rigged
     run(go())
 
 

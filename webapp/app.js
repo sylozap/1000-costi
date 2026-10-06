@@ -1444,7 +1444,6 @@ function openPlayerSheet(uid) {
   const p = state?.game?.players.find((x) => x.uid === uid);
   if (!p) return;
   pmUid = uid;
-  $('pmScore').value = p.score;
   $('pmChips').value = state.chips?.[uid] ?? '';
   $('playerModal').classList.remove('hidden');
   renderPlayerSheet(state);
@@ -1738,7 +1737,7 @@ function renderAdminGames() {
   $('admGamesFilter').querySelector('[data-f="off"]').textContent = offN ? `Корзина · ${offN}` : 'Корзина';
   $('admGamesNote').textContent = admGamesFilter === 'off'
     ? 'Эти партии не учитываются: статистика, рекорды, ачивки и банк откатаны. Их можно вернуть.'
-    : `Партий: ${list.length}. 🎯 — ты вмешивался (счёт, болт, самосвал).`;
+    : `Партий: ${list.length}. 🎯 — ты менял правила посреди партии.`;
   if (!list.length) box.innerHTML = '<p class="note">Пусто.</p>';
   for (const g of list) {
     const el = document.createElement('div');
@@ -1946,16 +1945,12 @@ onTap('msgAdminBtn', openAdmin);
 onTap('adminCloseBtn', () => $('adminModal').classList.add('hidden'));
 document.querySelectorAll('#adminTabs button').forEach((b) => b.addEventListener('click', () => adminTab(b.dataset.tab)));
 onTap('admPauseBtn', () => send({ type: 'admin', op: state?.paused ? 'resume' : 'pause' }));
-onTap('admUndoBtn', () => send({ type: 'admin', op: 'undo' }));
 onTap('admEndBtn', () => confirmThen('Завершить игру для всех?', () => send({ type: 'admin', op: 'end' })));
 onTap('admRulesBtn', () => {
   $('adminModal').classList.add('hidden');
   openEditor();
 });
 onTap('pmCloseBtn', () => $('playerModal').classList.add('hidden'));
-onTap('pmScoreBtn', () => send({ type: 'admin', op: 'set_score', uid: pmUid, score: Number($('pmScore').value) || 0 }));
-onTap('pmBoltBtn', () => send({ type: 'admin', op: 'bolt', uid: pmUid }));
-onTap('pmTruckBtn', () => send({ type: 'admin', op: 'samosval', uid: pmUid }));
 onTap('pmKickBtn', () => confirmThen('Исключить игрока?', () => {
   send({ type: 'admin', op: 'kick', uid: pmUid });
   $('playerModal').classList.add('hidden');
