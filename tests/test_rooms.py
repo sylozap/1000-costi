@@ -4,6 +4,7 @@ import json
 import pytest
 
 from game.engine import GameError
+from tests.test_engine import push_dice
 from game.rooms import RoomManager
 from game.stats import Presets, Stats
 
@@ -38,9 +39,9 @@ async def start_game(room, w1, w2):
     await room.attach(w1, 1, "Вася")
     await room.attach(w2, 2, "Петя")
     await room.handle(1, "Вася", {"type": "start"}, w1)
-    room.game.force_next([6, 6, 6, 6, 6])
+    push_dice(room.game, 6, 6, 6, 6, 6)
     await room.handle(1, "Вася", {"type": "order_roll"}, w1)
-    room.game.force_next([1, 1, 2, 2, 3])
+    push_dice(room.game, 1, 1, 2, 2, 3)
     await room.handle(2, "Петя", {"type": "order_roll"}, w2)
     assert room.game.phase == "play" and room.game.cur.uid == 1
 
@@ -101,12 +102,10 @@ def test_admin_spectate_pause_force_undo(tmp_path):
         await room.handle(ADMIN, "Админ", {"type": "admin", "op": "resume"}, wa)
 
         # ход Васи: 100 очков и запись
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "force", "dice": [1, 1, 1, 2, 3]}, wa)
+        push_dice(room.game, 1, 1, 1, 2, 3)
         await room.handle(1, "Вася", {"type": "roll"}, w1)
         await room.handle(1, "Вася", {"type": "stop"}, w1)
         assert room.game.player(1).score == 100 and room.game.cur.uid == 2
-        assert not any("подкручено" in e["text"] for e in room.game.log)  # игрокам не видно
-        assert any("подкручено" in a["detail"] for a in room.audit)       # а в журнале админа есть
 
         await room.handle(ADMIN, "Админ", {"type": "admin", "op": "undo"}, wa)
         assert room.game.player(1).score == 0 and room.game.cur.uid == 1
@@ -124,21 +123,19 @@ def test_admin_spectate_pause_force_undo(tmp_path):
     run(go())
 
 
-def test_admin_rig_visible_only_to_admin(tmp_path):
+def test_no_rigging_ops(tmp_path):
+    """Подкрутки бросков нет: старые админ-команды отвергаются, в состоянии ничего скрытого."""
     async def go():
         m, room = setup(tmp_path)
         w1, w2, wa = FakeWs(), FakeWs(), FakeWs()
         await start_game(room, w1, w2)
         await room.attach(wa, ADMIN, "Админ", spectate=True)
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "rig", "uid": 2, "mode": "exact",
-                                            "dice": [5, 5, 5, 0, 0]}, wa)
-        assert wa.last("state")["state"]["rigs"] == {"2": "5 5 5 ? ?"}
-        assert "rigs" not in w1.last("state")["state"]
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "unrig", "uid": 2}, wa)
-        assert wa.last("state")["state"]["rigs"] == {}
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "rig", "uid": 1, "mode": "good"}, wa)
-        await room.handle(1, "Вася", {"type": "roll"}, w1)
-        assert room.game.last_roll["points"] >= 100 and wa.last("state")["state"]["rigs"] == {}
+        for op in ({"op": "force", "dice": [1, 1, 1, 1, 1]}, {"op": "rig", "uid": 1, "mode": "good"},
+                   {"op": "unrig", "uid": 1}):
+            with pytest.raises(GameError, match="неизвестная команда"):
+                await room.handle(ADMIN, "Админ", {"type": "admin", **op}, wa)
+        assert "rigs" not in wa.last("state")["state"]
+        assert not hasattr(room.game, "force_next") and not hasattr(room.game, "rig")
     run(go())
 
 
@@ -160,7 +157,7 @@ def test_moment_achievement_unlocked_once(tmp_path):
         await start_game(room, w1, w2)
         room.game.player(1).score, room.game.player(1).opened = 495, True
         room.game._reset_turn()
-        room.game.force_next([6, 6, 6, 2, 3])
+        push_dice(room.game, 6, 6, 6, 2, 3)
         await room.handle(1, "Вася", {"type": "roll"}, w1)  # 555 — самосвал
         ach = [x for x in w2.out if x["type"] == "achievement"]
         assert [a["id"] for a in ach] == ["samosval"]
@@ -175,7 +172,7 @@ def test_five_ones_win_achievements_and_stats(tmp_path):
         m, room = setup(tmp_path)
         w1, w2 = FakeWs(), FakeWs()
         await start_game(room, w1, w2)
-        room.game.force_next([1, 1, 1, 1, 1])
+        push_dice(room.game, 1, 1, 1, 1, 1)
         await room.handle(1, "Вася", {"type": "roll"}, w1)
         assert room.status == "finished"
         got = {x["id"] for x in w1.out if x["type"] == "achievement" and x["uid"] == 1}
@@ -247,11 +244,11 @@ def test_stakes_pay_winner_and_refund(tmp_path):
         await room.handle(1, "Вася", {"type": "settings", "stake": 100}, w1)
         await room.handle(1, "Вася", {"type": "start"}, w1)
         assert room.state()["chips"] == {"1": 900, "2": 900} and room.state()["bank"] == 200
-        room.game.force_next([6, 6, 6, 6, 6])
+        push_dice(room.game, 6, 6, 6, 6, 6)
         await room.handle(1, "Вася", {"type": "order_roll"}, w1)
-        room.game.force_next([1, 1, 2, 2, 3])
+        push_dice(room.game, 1, 1, 2, 2, 3)
         await room.handle(2, "Петя", {"type": "order_roll"}, w2)
-        room.game.force_next([1, 1, 1, 1, 1])  # пять единиц — победа
+        push_dice(room.game, 1, 1, 1, 1, 1)  # пять единиц — победа
         await room.handle(1, "Вася", {"type": "roll"}, w1)
         assert room.status == "finished"
         assert m.profiles.chips(1) == 1100 and m.profiles.chips(2) == 900

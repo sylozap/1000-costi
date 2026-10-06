@@ -5,6 +5,7 @@ import pytest
 from game import config
 from game.engine import GameError
 from game.history import History, chat_records, honesty, profile
+from tests.test_engine import push_dice
 from tests.test_rooms import FakeWs, run, setup
 
 
@@ -63,13 +64,13 @@ def test_team_choose_shuffle_start_and_bank(tmp_path):
         g = room.game
         assert g.teams and g.player(1).side is g.player(4).side and g.player(2).side is g.player(3).side
         # победа команды: банк 400 делится на двоих
-        g.force_next([6, 6, 6, 6, 6])
+        push_dice(g, 6, 6, 6, 6, 6)
         while g.phase == "order":
             await room.handle(1, "Вася", {"type": "order_roll_all"}, w[0])
         win = g.cur
         win.score, win.opened = 990, True
         g._reset_turn()
-        g.force_next([2, 3, 4, 5, 6])
+        push_dice(g, 2, 3, 4, 5, 6)
         await room.handle(win.uid, "x", {"type": "roll"}, w[0])
         mates = [p.uid for p in g.members(win.side)]
         assert room.status == "finished" and sorted(g.winners) == sorted(mates)

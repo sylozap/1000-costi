@@ -15,10 +15,6 @@ const BARREL_DESC = {
   knock: 'На бочке только один: кто залез, сбрасывает сидящего вниз.',
 };
 const MINI_PIPS = { 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
-const FORCE_PRESETS = [
-  ['5 единиц', '1 1 1 1 1'], ['Большой стрит', '2 3 4 5 6'], ['Малый стрит', '1 2 3 4 5'],
-  ['Три единицы', '1 1 1 2 3'], ['Пусто', '2 3 4 6 6'], ['Пятёрка', '5 2 3 3 6'],
-];
 
 let ws = null;
 let me = null;
@@ -45,7 +41,6 @@ let pmUid = null; // игрок, открытый в админском окне
 const customDice = {}; // скин «c_…» → { faces: [адреса граней], name, ver }
 let diceAdmin = null; // последний список кубиков с картинками (админ)
 let de = null; // редактор кубика: { id, name, faces: [{ src, st: 'new'|'keep'|'none' }] }
-let pmDice = [0, 0, 0, 0, 0];
 // ---------- Telegram ----------
 if (tg) {
   tg.ready();
@@ -866,7 +861,6 @@ function renderGame(s) {
     const meta = el('div', 'pmeta');
     const badges = el('div', 'badges');
     const add = (text, cls = '') => badges.appendChild(el('span', 'badge ' + cls, text));
-    if (isAdmin && s.rigs?.[p.uid]) add(`🎯 ${s.rigs[p.uid]}`, 'rig');
     if (g.phase === 'order') {
       add(p.order_rolls.length ? `🎲 ${p.order_rolls.join(' → ')}` : '🎲 ждём', p.order_pending ? 'warn' : '');
     } else {
@@ -1437,21 +1431,19 @@ function renderAdminGame(s) {
   for (const p of g.players) {
     const row = document.createElement('button');
     row.className = 'adm-player';
-    row.innerHTML = '<b></b><span></span><span class="rig"></span>';
+    row.innerHTML = '<b></b><span></span><span class="chev">›</span>';
     row.querySelector('b').textContent = p.name;
     row.querySelector('span').textContent = p.score;
-    row.querySelector('.rig').textContent = s.rigs?.[p.uid] ? `🎯 ${s.rigs[p.uid]}` : '⚙️';
     row.onclick = () => openPlayerSheet(p.uid);
     box.appendChild(row);
   }
 }
 
-// ---------- админ: окно игрока (подкрутка и действия) ----------
+// ---------- админ: окно игрока ----------
 function openPlayerSheet(uid) {
   const p = state?.game?.players.find((x) => x.uid === uid);
   if (!p) return;
   pmUid = uid;
-  pmDice = [0, 0, 0, 0, 0];
   $('pmScore').value = p.score;
   $('pmChips').value = state.chips?.[uid] ?? '';
   $('playerModal').classList.remove('hidden');
@@ -1467,30 +1459,7 @@ function renderPlayerSheet(s) {
     return;
   }
   $('pmName').textContent = `${p.name} · ${p.score}`;
-  const rig = s.rigs?.[pmUid];
-  $('pmRig').textContent = rig ? `🎯 Подкручено: ${rig}` : 'Подкрутки нет — бросает честно';
-  $('pmRig').classList.toggle('on', !!rig);
-  $('pmUnrigBtn').classList.toggle('hidden', !rig);
-  $('pmPitBtn').disabled = !p.in_pit;
   $('pmHuman').classList.toggle('hidden', pmUid < 0);
-  const box = $('pmDice');
-  box.innerHTML = '';
-  pmDice.forEach((v, i) => {
-    const b = document.createElement('button');
-    b.className = 'pm-die' + (v ? '' : ' any');
-    if (v) b.appendChild(miniDie(v));
-    else b.textContent = '?';
-    b.onclick = () => {
-      pmDice[i] = (pmDice[i] + 1) % 7;
-      snd.haptic.select();
-      renderPlayerSheet(state);
-    };
-    box.appendChild(b);
-  });
-}
-
-function rig(body) {
-  send({ type: 'admin', op: 'rig', uid: pmUid, ...body });
 }
 
 // ---------- кубики с картинками ----------
@@ -1769,7 +1738,7 @@ function renderAdminGames() {
   $('admGamesFilter').querySelector('[data-f="off"]').textContent = offN ? `Корзина · ${offN}` : 'Корзина';
   $('admGamesNote').textContent = admGamesFilter === 'off'
     ? 'Эти партии не учитываются: статистика, рекорды, ачивки и банк откатаны. Их можно вернуть.'
-    : `Партий: ${list.length}. 🎯 — ты вмешивался (подкрутка, счёт, болт, самосвал).`;
+    : `Партий: ${list.length}. 🎯 — ты вмешивался (счёт, болт, самосвал).`;
   if (!list.length) box.innerHTML = '<p class="note">Пусто.</p>';
   for (const g of list) {
     const el = document.createElement('div');
@@ -1983,37 +1952,7 @@ onTap('admRulesBtn', () => {
   $('adminModal').classList.add('hidden');
   openEditor();
 });
-onTap('admForceBtn', () => {
-  const dice = $('admForce').value.split(/[\s,]+/).filter(Boolean).map(Number);
-  send({ type: 'admin', op: 'force', dice });
-});
-for (const [title, dice] of FORCE_PRESETS) {
-  const b = document.createElement('button');
-  b.className = 'chip';
-  b.textContent = title;
-  b.onclick = () => { $('admForce').value = dice; };
-  $('admForcePresets').appendChild(b);
-}
 onTap('pmCloseBtn', () => $('playerModal').classList.add('hidden'));
-onTap('pmExactBtn', () => {
-  if (!pmDice.some(Boolean)) return showError('Задай хотя бы один кубик');
-  rig({ mode: 'exact', dice: pmDice });
-});
-onTap('pmUnrigBtn', () => send({ type: 'admin', op: 'unrig', uid: pmUid }));
-document.querySelectorAll('#playerModal [data-rig]').forEach((b) => b.addEventListener('click', () => {
-  snd.haptic.impact('light');
-  rig({ mode: b.dataset.rig });
-}));
-for (const [title, dice] of FORCE_PRESETS) {
-  const b = document.createElement('button');
-  b.className = 'chip';
-  b.textContent = title;
-  b.onclick = () => {
-    pmDice = dice.split(' ').map(Number);
-    renderPlayerSheet(state);
-  };
-  $('pmPresets').appendChild(b);
-}
 onTap('pmScoreBtn', () => send({ type: 'admin', op: 'set_score', uid: pmUid, score: Number($('pmScore').value) || 0 }));
 onTap('pmBoltBtn', () => send({ type: 'admin', op: 'bolt', uid: pmUid }));
 onTap('pmTruckBtn', () => send({ type: 'admin', op: 'samosval', uid: pmUid }));

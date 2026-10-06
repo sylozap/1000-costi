@@ -218,7 +218,6 @@ button.row:active, .player-row.tappable:active { background: var(--surface-2); }
 .badge { white-space: nowrap; }
 .badge.warn { color: var(--warn); }
 .badge.bad { color: var(--danger); }
-.badge.rig { color: var(--warn); border: 1px dashed var(--warn); border-radius: 6px; padding: 0 4px; }
 .chance { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chance b { color: var(--text); font-weight: 650; }
 .team-stripe { position: absolute; left: 10px; right: 10px; top: 0; height: 3px; border-radius: 0 0 3px 3px; }
@@ -503,17 +502,11 @@ button.row:active, .player-row.tappable:active { background: var(--surface-2); }
 .adm-player { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 14px; border: 0; background: none; text-align: left; }
 .adm-player + .adm-player { border-top: 1px solid var(--line); }
 .adm-player b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.adm-player .rig { font-size: 12px; color: var(--warn); }
 .adm-room { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .adm-room > div { flex: 1; min-width: 0; }
 .adm-room.current b { color: var(--accent); }
 .adm-room .small { font-size: 12px; color: var(--muted); }
 .audit { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-family: ui-monospace, monospace; }
-.pm-rig { text-align: center; font-size: 13px; color: var(--muted); padding: 8px; border-radius: 12px; background: var(--surface-2); }
-.pm-rig.on { color: var(--warn); font-weight: 700; }
-.pm-dice { display: flex; justify-content: center; gap: 8px; }
-.pm-die { width: 46px; height: 46px; border-radius: 12px; border: 0; background: var(--surface-2); display: grid; place-items: center; font-size: 20px; font-weight: 800; color: var(--muted); padding: 0; }
-.pm-die .mini-die { width: 34px; height: 34px; }
 .row-btns.three > .btn { flex: 1; padding: 10px 6px; font-size: 14px; }
 .pm-human { display: flex; flex-direction: column; gap: 8px; }
 

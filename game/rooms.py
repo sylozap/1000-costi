@@ -74,7 +74,7 @@ class Room:
         self._timer_token = 0
         self._last_react: dict[int, float] = {}
         self._announced: dict[int, set] = {}
-        self.rigged = False  # админ вмешивался в партию (подкрутка, счёт, болт, самосвал)
+        self.rigged = False  # админ вмешивался в партию (счёт, болт, самосвал)
         self.snapshots: list[tuple[int, Game]] = []
         self.audit: list[dict] = []
         self.lobby_msg_id: int | None = None
@@ -175,14 +175,9 @@ class Room:
         self.updated = time.time()
         state = self.state()
         payload = json.dumps({"type": "state", "state": state}, ensure_ascii=False)
-        admin_payload = None
-        if self.game and any(is_admin(u) for u in self.clients.values()):
-            # подкрутки видит только админ
-            admin_payload = json.dumps({"type": "state", "state": dict(state, rigs=self.game.rigs_view())},
-                                       ensure_ascii=False)
-        for ws, uid in list(self.clients.items()):
+        for ws in list(self.clients):
             try:
-                await ws.send_str(admin_payload if admin_payload and is_admin(uid) else payload)
+                await ws.send_str(payload)
             except Exception:  # noqa: BLE001 — клиент отвалился
                 self.clients.pop(ws, None)
 
@@ -520,7 +515,7 @@ class Room:
         g = self.game
         if action in ("roll", "order_roll") and g and g.last_roll and g.last_roll["uid"] == uid:
             lr = g.last_roll
-            detail = " ".join(map(str, lr["dice"])) + f" → {lr['points']}" + (" (подкручено)" if lr.get("forced") else "")
+            detail = " ".join(map(str, lr["dice"])) + f" → {lr['points']}"
             self._audit(uid, name, action, detail)
         else:
             self._audit(uid, name, action, "; ".join(e["text"] for e in events if e["kind"] != "roll")[:300])
@@ -786,7 +781,7 @@ class Room:
             return
 
         g = self._game()
-        if op in ("set_score", "bolt", "samosval", "force", "rig"):
+        if op in ("set_score", "bolt", "samosval"):
             self.rigged = True
         if op == "undo":
             self._require(self.snapshots, "нечего отменять")
@@ -802,25 +797,6 @@ class Room:
             events = g.admin_bolt(int(msg.get("uid", 0)))
         elif op == "samosval":
             events = g.admin_samosval(int(msg.get("uid", 0)))
-        elif op == "force":
-            dice = msg.get("dice") or []
-            try:
-                dice = [int(d) for d in dice]
-            except (TypeError, ValueError):
-                raise GameError("значения кубиков — числа от 1 до 6") from None
-            g.force_next(dice)
-            await self.send_to(ws, {"type": "admin_ok", "text": f"Следующий бросок: {' '.join(map(str, dice))}"})
-            return
-        elif op == "rig":
-            target = int(msg.get("uid", 0))
-            what = g.rig(target, {"mode": msg.get("mode"), "dice": msg.get("dice")})
-            await self.send_to(ws, {"type": "admin_ok", "text": f"🎯 {g.player(target).name}: {what}"})
-            await self.broadcast()
-            return
-        elif op == "unrig":
-            g.unrig(int(msg.get("uid", 0)))
-            await self.broadcast()
-            return
         else:
             raise GameError("неизвестная команда")
         await self._after(events)

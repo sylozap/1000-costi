@@ -82,9 +82,6 @@ def test_roll_analytics_and_honesty():
     turn(g, rng, (1, 5, 2, 3, 6), stop=False)
     a = g.player(1).an
     assert a["rolls"] == 1 and a["pts"] == 15 and a["faces"] == [1, 1, 1, 0, 1, 1] and a["exp"] > 0
-    g.force_next([1, 1, 1, 1, 2])  # подкрученный бросок в честность и удачу не идёт
-    g.roll(1)
-    assert a["rolls"] == 1
 
 
 def test_decision_quality():

@@ -3,20 +3,20 @@ import pytest
 
 from game.engine import GameError
 from game.history import chat_records, profile
+from tests.test_engine import push_dice
 from tests.test_rooms import ADMIN, FakeWs, run, setup
 
 
 async def win_game(room, w1, w2, admin_ws=None):
     """Вася побеждает пятью единицами (ачивки: у Васи five_ones и dry_win, у Пети zero_finish)."""
     await room.handle(1, "Вася", {"type": "start"}, w1)
-    room.game.force_next([6, 6, 6, 6, 6])
+    push_dice(room.game, 6, 6, 6, 6, 6)
     await room.handle(1, "Вася", {"type": "order_roll"}, w1)
-    room.game.force_next([1, 1, 2, 2, 3])
+    push_dice(room.game, 1, 1, 2, 2, 3)
     await room.handle(2, "Петя", {"type": "order_roll"}, w2)
-    if admin_ws:
-        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "force", "dice": [1, 1, 1, 1, 1]}, admin_ws)
-    else:
-        room.game.force_next([1, 1, 1, 1, 1])
+    if admin_ws:  # вмешательство админа (счёт без изменений) — партия помечается 🎯
+        await room.handle(ADMIN, "Админ", {"type": "admin", "op": "set_score", "uid": 2, "score": 0}, admin_ws)
+    push_dice(room.game, 1, 1, 1, 1, 1)
     await room.handle(1, "Вася", {"type": "roll"}, w1)
     assert room.status == "finished"
 

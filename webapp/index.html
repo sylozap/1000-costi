@@ -346,12 +346,6 @@
           <button class="btn secondary" id="admRulesBtn">⚙️ Правила</button>
           <button class="btn danger" id="admEndBtn">⛔ Завершить</button>
         </div>
-        <div class="field-label">Следующий бросок (любого игрока)</div>
-        <div class="force-row">
-          <input class="input" id="admForce" placeholder="например 1 1 1 1 1" inputmode="numeric">
-          <button class="btn primary" id="admForceBtn">Задать</button>
-        </div>
-        <div class="chips" id="admForcePresets"></div>
         <div class="field-label">Игроки</div>
         <div class="list card flat" id="admPlayers"></div>
       </div>
@@ -395,26 +389,6 @@
     <div class="modal-card tall admin">
       <div class="grabber"></div>
       <h2 id="pmName"></h2>
-      <div class="pm-rig" id="pmRig"></div>
-      <div class="field-label">Следующий бросок: тап по кубику меняет значение (? — случайно)</div>
-      <div class="pm-dice" id="pmDice"></div>
-      <div class="row-btns">
-        <button class="btn primary" id="pmExactBtn">🎯 Задать</button>
-        <button class="btn secondary" id="pmUnrigBtn">Снять подкрутку</button>
-      </div>
-      <div class="chips" id="pmPresets"></div>
-      <div class="field-label">Естественно (сервер сам подберёт кубики)</div>
-      <div class="row-btns three">
-        <button class="btn secondary" data-rig="bolt">🔩 Болт</button>
-        <button class="btn secondary" data-rig="low">🙂 Мало</button>
-        <button class="btn secondary" data-rig="good">💰 Хорошо</button>
-      </div>
-      <div class="field-label">Цель хода (держится, пока не выполнится или ход не кончится)</div>
-      <div class="row-btns three">
-        <button class="btn secondary" data-rig="samosval">🚛 Самосвал</button>
-        <button class="btn secondary" data-rig="win">🏆 Победа</button>
-        <button class="btn secondary" data-rig="pit" id="pmPitBtn">🕳 Из ямы</button>
-      </div>
       <div class="field-label">Счёт</div>
       <div class="force-row">
         <input class="input" id="pmScore" type="number" step="5" inputmode="numeric">
@@ -474,6 +448,6 @@
 
   <div id="errorToast" class="error-toast hidden"></div>
 
-  <script type="module" src="/static/app.js?v=8"></script>
+  <script type="module" src="/static/app.js?v=9"></script>
 </body>
 </html>

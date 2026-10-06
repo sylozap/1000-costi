@@ -19,6 +19,26 @@ class FakeRng:
         return 1
 
 
+class DiceRng(FakeRng):
+    """Как FakeRng, но когда очередь пуста — честные случайные броски."""
+
+    def __init__(self):
+        super().__init__()
+        self.rnd = __import__("random").Random(7)
+
+    def randint(self, a, b):
+        if b == 6 and not self.queue:
+            return self.rnd.randint(a, b)
+        return super().randint(a, b)
+
+
+def push_dice(g, *dice):
+    """Задать следующие броски в тестах (вместо удалённой админской подкрутки)."""
+    if not isinstance(g.rng, DiceRng):
+        g.rng = DiceRng()
+    g.rng.push(*dice)
+
+
 def make(n=2, barrel="none"):
     rng = FakeRng()
     g = Game([(i + 1, f"P{i + 1}") for i in range(n)], barrel=barrel, rng=rng)

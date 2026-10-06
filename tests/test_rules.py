@@ -301,15 +301,6 @@ def test_roll_limit_burns_without_bolt():
 
 # ---------- админ ----------
 
-def test_force_next_roll():
-    g, rng = make()
-    g.force_next([1, 1, 1, 1, 1])
-    g.roll(1)
-    assert g.last_roll["dice"] == [1, 1, 1, 1, 1] and g.winner == 1
-    with pytest.raises(GameError):
-        g.force_next([7])
-
-
 def test_admin_set_score_and_barrel():
     g, rng = make({"barrel": "points"})
     g.admin_set_score(2, 900)
@@ -333,84 +324,3 @@ def test_set_rules_midgame_drops_barrel():
     g.admin_set_score(1, 900)
     g.set_rules({"barrel": "none"})
     assert not g.player(1).on_barrel
-
-
-# ---------- подкрутка конкретного игрока ----------
-
-def test_rig_exact_only_for_that_player():
-    g, rng = make()
-    g.rig(2, {"mode": "exact", "dice": [1, 1, 1, 0, 0]})
-    turn(g, rng, ZERO, stop=False)  # P1 бросает честно
-    rng.push(2, 3)  # случайные «?»
-    g.roll(2)
-    assert g.last_roll["dice"][:3] == [1, 1, 1] and g.last_roll["forced"]
-    assert 2 not in g.rigs
-
-
-def test_rig_natural_modes():
-    for mode, check in (("bolt", lambda pts: pts == 0), ("low", lambda pts: 0 < pts <= 20),
-                        ("good", lambda pts: pts >= 100)):
-        g, _ = make()
-        g.rng = __import__("random").Random(1)
-        g.rig(1, {"mode": mode})
-        g.roll(1)
-        assert check(g.last_roll["points"]), (mode, g.last_roll)
-        assert g.last_roll["dice"] != [1] * 5
-
-
-def test_rig_samosval_reaches_555():
-    import random
-    g, _ = make()
-    g.rng = random.Random(3)
-    setp(g, 1, score=300, opened=True)
-    g.rig(1, {"mode": "samosval"})
-    for _ in range(10):
-        if g.cur.uid != 1:
-            break
-        g.roll(1)
-    assert g.player(1).score == 0 and g.player(1).st["samosvals"] == 1
-    assert 1 not in g.rigs
-
-
-def test_rig_pit_and_win():
-    import random
-    g, _ = make()
-    g.rng = random.Random(5)
-    setp(g, 1, score=210, opened=True)
-    g.rig(1, {"mode": "pit"})
-    g.roll(1)
-    while not g.can_stop():  # все кубики сыграли — подтверждение тоже подкручено
-        g.roll(1)
-    assert g.turn_start_score + g.turn_points >= 300
-    g.stop(1)
-    assert g.player(1).score >= 300 and 1 not in g.rigs
-    g.rng = random.Random(7)
-    setp(g, 2, score=900, opened=True)
-    g.rig(2, {"mode": "win"})
-    for _ in range(10):
-        if g.phase == "finished":
-            break
-        g.roll(2)
-    assert g.winner == 2
-
-
-def test_rig_cleared_when_turn_ends():
-    import random
-    g, rng = make()
-    setp(g, 1, score=100, opened=True)
-    g.rig(1, {"mode": "samosval"})
-    g.rng = random.Random(2)
-    g.roll(1)
-    assert g.cur.uid == 1 and g.rigs[1]["used"]
-    g.timeout()  # ход кончился, цель не достигнута
-    assert g.cur.uid == 2 and 1 not in g.rigs
-
-
-def test_rig_errors():
-    g, _ = make()
-    with pytest.raises(GameError):
-        g.rig(1, {"mode": "pit"})
-    with pytest.raises(GameError):
-        g.rig(1, {"mode": "exact", "dice": [7]})
-    with pytest.raises(GameError):
-        g.rig(99, {"mode": "bolt"})
