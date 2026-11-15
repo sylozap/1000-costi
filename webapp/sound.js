@@ -24,11 +24,18 @@ try {
   });
 } catch (e) { /* старый клиент Telegram */ }
 
-// iPhone: играть и в беззвучном режиме (выключается кнопкой 🔊 в игре)
-try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* нет API */ }
+function syncAudioSession() {
+  try { if (navigator.audioSession) navigator.audioSession.type = enabled ? 'playback' : 'auto'; } catch (e) { /* нет API */ }
+}
+syncAudioSession();
 
 function apply(v, persist) {
   enabled = v;
+  syncAudioSession();
+  if (!enabled && ctx) {
+    try { ctx.close().catch(() => {}); } catch (e) { /* уже закрыт */ }
+    ctx = null;
+  }
   if (persist) {
     try { localStorage.setItem('sound', v ? 'on' : 'off'); } catch (e) { /* без localStorage */ }
     try { cloud?.setItem('sound', v ? 'on' : 'off'); } catch (e) { /* старый клиент Telegram */ }
@@ -52,7 +59,7 @@ export function state() { return ctx ? ctx.state : 'none'; }
 
 /** Будит звук. Вызывается из любого касания экрана (см. ниже), повторные вызовы безопасны. */
 export function unlock() {
-  if (!AC) return;
+  if (!enabled || !AC) return;
   if (ctx && (ctx.state === 'closed' || (stale && ctx.state !== 'running'))) {
     try { ctx.close(); } catch (e) { /* уже закрыт */ }
     ctx = null;
@@ -73,7 +80,7 @@ export function unlock() {
 }
 
 function wake() {
-  if (!ctx || ctx.state === 'running' || ctx.state === 'closed') return;
+  if (!enabled || !ctx || ctx.state === 'running' || ctx.state === 'closed') return;
   ctx.resume?.().catch(() => {});
   // если система не разбудила контекст за полсекунды, при следующем касании создаём новый
   setTimeout(() => { if (ctx && ctx.state !== 'running') stale = true; }, 500);
