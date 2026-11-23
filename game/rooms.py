@@ -317,8 +317,28 @@ class Room:
             raise GameError("игра на паузе")
 
         if action == "join":
-            if self.status != "lobby":
-                raise GameError("игра уже началась")
+            self._require(self.status in ("lobby", "game"), "партия уже закончилась")
+            if self.status == "game":
+                g = self._game()
+                if any(p.uid == uid for p in g.players):
+                    await self.broadcast()
+                    return  # повторное нажатие и переподключение не сбрасывают счёт
+                self._require(not g.teams, "в командную игру можно вступить только в лобби")
+                self._require(len(g.players) < MAX_PLAYERS, "комната заполнена")
+                # Взнос показывается на кнопке. Уже оплаченный взнос повторно не берём.
+                cost = self.stake if uid not in self.stakes else 0
+                self._require(self.manager.profiles.chips(uid) >= cost, "не хватает фишек на взнос")
+                events = g.add_player(uid, name)
+                if cost:
+                    self.manager.profiles.add_chips(uid, -cost)
+                    self.stakes[uid] = cost
+                self.members[uid] = name
+                self._audit(uid, name, "join", "вход в партию с 0 очками")
+                await self.manager.notify("game_events", self, events)
+                self._schedule_winprob(force=True)
+                # Вход не перезапускает чужой таймер, бросок или задачу бота.
+                await self.broadcast()
+                return
             if uid not in self.members:
                 if len(self.members) >= MAX_PLAYERS:
                     raise GameError("комната заполнена")

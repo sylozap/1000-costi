@@ -671,6 +671,20 @@ class Game:
 
     # ---------- состав ----------
 
+    def add_player(self, uid: int, name: str) -> list[dict]:
+        """Поздний вход в одиночную партию: нулевой счёт, в конец очереди."""
+        self._begin()
+        if self.phase not in ("order", "play"):
+            raise GameError("партия уже закончилась")
+        if any(p.uid == uid for p in self.players):
+            return []
+        if self.teams:
+            raise GameError("в командную игру можно вступить только в лобби")
+        self.players.append(Player(uid, name))
+        self.order.append(uid)
+        self._ev("join", f"👋 {name} присоединился(-лась) с 0 очками", uid)
+        return self._new_events
+
     def remove_player(self, uid: int) -> list[dict]:
         self._begin()
         p = self.player(uid)

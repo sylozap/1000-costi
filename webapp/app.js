@@ -352,6 +352,9 @@ async function processEvents(s) {
         if (e.kind === 'commit') mapSfx('commit');
         if (mine) snd.haptic.notify('success');
         break;
+      case 'join':
+        toast('👋', e.text, 1800);
+        break;
       case 'limit':
         toast('✋', 'Лимит бросков');
         break;
@@ -838,7 +841,11 @@ function renderGame(s) {
   if (!g) return;
   const r = s.rules;
   const inGame = g.players.some((p) => p.uid === me);
+  const canJoin = !inGame && s.status === 'game' && !g.teams && g.players.length < s.max_players;
   $('specBanner').classList.toggle('hidden', inGame || g.phase === 'finished');
+  $('specBanner').textContent = g.teams ? '👀 Ты зритель · вступление в команды — в лобби' : '👀 Ты зритель';
+  $('joinGameBtn').classList.toggle('hidden', !canJoin);
+  $('joinGameBtn').textContent = 'Вступить с 0 очками' + (s.settings.stake ? ` · взнос ${s.settings.stake} 🪙` : '');
   $('pauseOverlay').classList.toggle('hidden', !s.paused);
 
   const box = $('players');
@@ -1843,6 +1850,7 @@ onTap('stopBtn', () => {
 });
 onTap('startBtn', () => send({ type: 'start' }));
 onTap('joinBtn', () => send({ type: 'join' }));
+onTap('joinGameBtn', () => send({ type: 'join' }));
 onTap('leaveLobbyBtn', () => confirmThen('Выйти из лобби?', () => send({ type: 'leave' })));
 onTap('leaveGameBtn', () => {
   $('moreSheet').classList.add('hidden');
