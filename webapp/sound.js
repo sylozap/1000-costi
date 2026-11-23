@@ -207,9 +207,17 @@ const SFX = {
   overtake() { const t = ctx.currentTime; tone(400, t, 0.4, { type: 'sawtooth', gain: 0.06, slide: 900 }); },
   samosval() {
     const t = ctx.currentTime;
-    tone(196, t, 0.45, { type: 'sawtooth', gain: 0.12 }); tone(247, t, 0.45, { type: 'sawtooth', gain: 0.1 });
-    tone(196, t + 0.55, 0.7, { type: 'sawtooth', gain: 0.12 }); tone(247, t + 0.55, 0.7, { type: 'sawtooth', gain: 0.1 });
-    tone(300, t + 1.1, 0.9, { type: 'sawtooth', gain: 0.08, slide: -240 });
+    // Дизель, два гудка, гидравлика и россыпь очков — в ритм разгрузки.
+    tone(52, t, 0.85, { type: 'sawtooth', gain: 0.075, slide: 22 });
+    noise(t, 0.8, { type: 'lowpass', freq: 180, gain: 0.12 });
+    for (const d of [0.15, 0.45]) {
+      tone(146, t + d, 0.24, { type: 'sawtooth', gain: 0.09 });
+      tone(196, t + d, 0.24, { type: 'sawtooth', gain: 0.07 });
+    }
+    noise(t + 1.15, 0.55, { type: 'bandpass', freq: 1200, q: 2, gain: 0.1 });
+    for (let i = 0; i < 8; i++) tone(600 + (i * 137 % 900), t + 1.5 + i * 0.08, 0.13, { type: 'triangle', gain: 0.055 });
+    tone(70, t + 2.25, 0.25, { gain: 0.17, slide: -30 });
+    tone(65, t + 3.1, 0.6, { type: 'sawtooth', gain: 0.065, slide: 45 });
   },
   barrel() { const t = ctx.currentTime; tone(110, t, 0.25, { type: 'sine', gain: 0.3 }); tone(90, t + 0.18, 0.3, { type: 'sine', gain: 0.25 }); },
   fall() { const t = ctx.currentTime; tone(700, t, 0.6, { type: 'triangle', gain: 0.12, slide: -600 }); tone(80, t + 0.55, 0.3, { gain: 0.35 }); },

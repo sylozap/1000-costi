@@ -1,6 +1,7 @@
 import { lineChart, seriesColor } from './charts.js';
 import { customFaceCanvas, DiceTable, faceCanvas } from './dice3d.js';
 import { MAP_ICONS } from './maps.js';
+import { showDumpTruck } from './truck.js';
 import * as snd from './sound.js';
 import { renderGameDetail, renderProfile, renderRecords } from './views.js';
 
@@ -375,9 +376,9 @@ async function processEvents(s) {
         snd.play('samosval');
         mapSfx('samosval');
         if (fight) caption('KO!', 'ko');
-        fxTruck();
+        showDumpTruck($('fxLayer'), nameOf(s, e.uid), r.samosval);
         flashChip(e.uid);
-        toast('🚛', `Самосвал! ${nameOf(s, e.uid)} → 0`, 2200);
+        flyPenalty(e.uid, '→ 0');
         snd.haptic.notify('error');
         break;
       case 'overtake':
@@ -479,10 +480,6 @@ function caption(text, cls = '') {
   el.classList.add('show');
   clearTimeout(caption.t);
   caption.t = setTimeout(() => el.classList.add('hidden'), 1800);
-}
-
-function fxTruck() {
-  fxAdd('fx-truck', '<span class="truck">🚛</span><span class="dust">💨</span>', 2600);
 }
 
 function fxPit(stay = false) {
