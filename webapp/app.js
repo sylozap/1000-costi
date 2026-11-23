@@ -1,6 +1,7 @@
 import { lineChart, seriesColor } from './charts.js';
 import { customFaceCanvas, DiceTable, faceCanvas } from './dice3d.js';
 import { MAP_ICONS } from './maps.js';
+import { progressFeatures } from './progress.js';
 import * as snd from './sound.js';
 import { renderGameDetail, renderProfile, renderRecords } from './views.js';
 
@@ -854,10 +855,36 @@ function renderGame(s) {
     const score = el('div', 'pscore', String(p.score));
     if (prevScores.has(p.uid) && prevScores.get(p.uid) !== p.score) score.classList.add('bump');
     prevScores.set(p.uid, p.score);
-    const bar = el('div', 'progress');
+    const bar = el('button', 'progress');
+    bar.type = 'button';
+    const features = progressFeatures(r);
+    const description = features.map((f) => f.label).join(' · ');
+    bar.setAttribute('aria-label', `Прогресс ${p.name}: ${p.score} из 1000. ${description}. Подробнее`);
+    bar.title = description;
+    bar.onclick = (event) => {
+      event.stopPropagation();
+      $('trackTitle').textContent = `${p.name} · ${p.score} / 1000`;
+      const body = $('trackBody'); body.replaceChildren();
+      body.appendChild(el('p', 'note', 'Цель — 1000 очков. Отметки соответствуют правилам этой партии.'));
+      for (const f of features) {
+        body.appendChild(el('div', `track-detail ${f.kind}`, f.label));
+      }
+      if (!features.length) body.appendChild(el('p', 'note', 'Ямы, самосвал и бочка отключены.'));
+      openSheet('trackSheet');
+    };
     const fill = el('i');
     fill.style.width = `${Math.min(100, Math.max(0, p.score / 10))}%`;
     bar.appendChild(fill);
+    for (const f of features) {
+      const mark = el('span', `track-mark ${f.kind}`);
+      mark.style.left = `${f.start / 10}%`;
+      if (f.end != null) mark.style.width = `${(f.end - f.start) / 10}%`;
+      mark.title = f.label;
+      bar.appendChild(mark);
+    }
+    const pointer = el('span', 'track-pointer');
+    pointer.style.left = `${Math.min(100, Math.max(0, p.score / 10))}%`;
+    bar.appendChild(pointer);
     const meta = el('div', 'pmeta');
     const badges = el('div', 'badges');
     const add = (text, cls = '') => badges.appendChild(el('span', 'badge ' + cls, text));
@@ -1930,6 +1957,7 @@ onTap('shareCopyBtn', () => {
   navigator.clipboard?.writeText(sharedLink).then(() => showInfo('Ссылка скопирована'), () => showError('Не удалось скопировать'));
 });
 onTap('shareCloseBtn', () => $('shareModal').classList.add('hidden'));
+onTap('trackCloseBtn', () => $('trackSheet').classList.add('hidden'));
 onTap('achCloseBtn', () => $('achModal').classList.add('hidden'));
 for (const [seg, key] of [['segBarrel', 'barrel'], ['segTimer', 'timer'], ['segStake', 'stake']]) {
   $(seg).querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
