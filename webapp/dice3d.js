@@ -66,12 +66,34 @@ export const SKINS = {
   neon: { bg: ['#1c1c33', '#07070f'], pip: ['#a8fff7', '#00e5d4'], one: ['#ff9cf0', '#ff2bd6'], metal: 0.1, rough: 0.3, glow: true },
   ice: { bg: ['#f2fdff', '#93d3ec'], pip: ['#1d6fb8', '#0b3d6e'], one: ['#1d6fb8', '#0b3d6e'], metal: 0.1, rough: 0.08, pattern: 'ice' },
   candy: { bg: ['#ffffff', '#ffe9f2'], pip: ['#e3266f', '#9c0f45'], one: ['#e3266f', '#9c0f45'], metal: 0, rough: 0.25, pattern: 'candy' },
+  prism: { bg: ['#f1fbf4', '#b1d9d5'], pip: ['#f6da7b', '#725822'], one: ['#ffaf95', '#9b3455'], metal: 0.12, rough: 0.12, pattern: 'prism', numerals: true },
   bone: { bg: ['#f4ebd3', '#c4b38a'], pip: ['#4a3420', '#21150a'], one: ['#8a2a14', '#4a0f05'], metal: 0, rough: 0.7, pattern: 'bone' },
 };
 
 function skinPattern(g, s, kind, v) {
   const rnd = mulberry32(v * 97 + kind.length);
-  if (kind === 'marble') {
+  if (kind === 'prism') {
+    // Слои цветной смолы и полупрозрачные иридисцентные осколки.
+    const colors = ['35,202,203', '245,112,152', '254,197,83', '112,132,244', '125,225,183'];
+    for (let i = 0; i < 28; i++) {
+      const x = rnd() * s, y = rnd() * s;
+      g.fillStyle = `rgba(${colors[i % colors.length]},${0.12 + rnd() * 0.28})`;
+      g.beginPath(); g.moveTo(x, y);
+      g.lineTo(x + (rnd() - 0.5) * s, y + rnd() * s * 0.7);
+      g.lineTo(x + (rnd() - 0.5) * s, y - rnd() * s * 0.6);
+      g.closePath(); g.fill();
+      g.strokeStyle = 'rgba(255,255,245,0.5)'; g.lineWidth = 1; g.stroke();
+    }
+    const shine = g.createLinearGradient(0, 0, s, s);
+    shine.addColorStop(0, 'rgba(255,255,255,0.85)');
+    shine.addColorStop(0.22, 'rgba(255,255,255,0)');
+    shine.addColorStop(0.48, 'rgba(255,255,255,0.55)');
+    shine.addColorStop(0.55, 'rgba(255,255,255,0)');
+    shine.addColorStop(1, 'rgba(255,255,255,0.65)');
+    g.fillStyle = shine; g.fillRect(0, 0, s, s);
+    g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 8;
+    g.strokeRect(5, 5, s - 10, s - 10);
+  } else if (kind === 'marble') {
     for (let i = 0; i < 7; i++) {
       g.strokeStyle = `rgba(90,90,105,${0.15 + rnd() * 0.25})`;
       g.lineWidth = 1 + rnd() * 3;
@@ -139,6 +161,16 @@ export function faceCanvas(v, skin = 'ivory') {
   g.fillStyle = grad;
   g.fillRect(0, 0, s, s);
   if (sk.pattern) skinPattern(g, s, sk.pattern, v);
+  if (sk.numerals) {
+    const colors = ['#b34365', '#2388a5', '#8660b2', '#c36629', '#827127', '#237d75'];
+    g.font = 'bold 178px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineJoin = 'round'; g.lineWidth = 7; g.strokeStyle = 'rgba(255,255,235,0.95)';
+    g.shadowColor = 'rgba(30,51,63,0.45)'; g.shadowBlur = 5; g.shadowOffsetY = 3;
+    g.strokeText(String(v), s / 2, s / 2 + 10);
+    g.fillStyle = colors[v - 1]; g.fillText(String(v), s / 2, s / 2 + 10);
+    if (v === 6) { g.shadowBlur = 0; g.fillRect(s / 2 - 28, 214, 56, 5); }
+    return c;
+  }
   for (const [px, py] of PIPS[v]) {
     const r = v === 1 ? 34 : 22;
     const x = px * s, y = py * s;
@@ -288,7 +320,7 @@ export class DiceTable {
     const geo = new RoundedBoxGeometry(DIE, DIE, DIE, 5, 0.13);
     this.dice = [];
     for (let i = 0; i < 5; i++) {
-      const mats = textures.map((map) => new THREE.MeshStandardMaterial({ map, roughness: 0.35, metalness: 0 }));
+      const mats = textures.map((map) => new THREE.MeshPhysicalMaterial({ map, roughness: 0.35, metalness: 0 }));
       const mesh = new THREE.Mesh(geo, mats);
       mesh.castShadow = true;
       const ring = new THREE.Mesh(
@@ -434,6 +466,7 @@ export class DiceTable {
       for (const m of [].concat(o.material || [])) m.needsUpdate = true;
     });
     if (this.env) this._applyHeavy(this.env.group);
+    if (this.skin === 'prism') { this.skin = null; this.setSkin('prism'); }
     this._resize();
   }
 
@@ -490,6 +523,11 @@ export class DiceTable {
         m.map = tex[i];
         m.metalness = look.metal;
         m.roughness = look.rough;
+        m.clearcoat = name === 'prism' ? 1 : 0;
+        m.iridescence = name === 'prism' ? 0.7 : 0;
+        m.transmission = name === 'prism' && this.quality !== 'low' ? 0.35 : 0;
+        m.thickness = name === 'prism' ? 0.5 : 0;
+        m.ior = 1.46;
         m.needsUpdate = true;
       });
     }
