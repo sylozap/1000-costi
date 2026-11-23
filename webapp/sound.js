@@ -140,6 +140,7 @@ export function knock(strength = 1) {
       tone(120, t, 0.18, { type: 'triangle', gain: 0.22 * k, slide: -50 });
       tone(95, t + 0.07, 0.12, { type: 'triangle', gain: 0.08 * k });
       break;
+    case 'basketball': // паркет
     case 'bar': // дерево: «ток»
       noise(t, 0.05, { type: 'bandpass', freq: 1100 + Math.random() * 400, q: 5, gain: 0.8 * k });
       tone(420 + Math.random() * 80, t, 0.07, { type: 'triangle', gain: 0.18 * k });
@@ -155,6 +156,8 @@ export function knock(strength = 1) {
         tone(3500 + Math.random() * 300, t + d, 0.15, { gain: g * 0.6 });
       });
       break;
+    case 'football': // мягкий газон
+    case 'zen': //
     case 'beach': // мягкий шлепок в песок
       noise(t, 0.16, { type: 'lowpass', freq: 650, q: 0.5, gain: 0.45 * k, attack: 0.01 });
       noise(t + 0.02, 0.12, { type: 'highpass', freq: 3000, q: 0.5, gain: 0.08 * k });

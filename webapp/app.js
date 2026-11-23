@@ -59,6 +59,9 @@ const MAP_SFX = {
   space: { preview: 'whoosh', throw: 'whoosh', commit: 'laser', zero: 'powerDown', samosval: 'powerDown', win: 'warp' },
   beach: { preview: 'seagull', zero: 'waveWash', big: 'seagull', win: 'seagull' },
   snow: { preview: 'sleigh', commit: 'sleigh', zero: 'creak', win: 'sleigh' },
+  football: { preview: 'crowd', big: 'crowd', win: 'crowd' },
+  basketball: { preview: 'bell', big: 'crowd', win: 'crowd' },
+  zen: { preview: 'clink', big: 'clink', win: 'clink' },
 };
 const mapId = () => state?.settings?.map || 'felt';
 const isFightMap = () => mapId() === 'octagon' || mapId() === 'ring';
@@ -652,7 +655,7 @@ function canEditRules(s) {
 }
 
 const TEAM_COLORS = ['#e5484d', '#3e7bfa', '#2fb67c', '#e8b10e'];
-const MAP_NAMES = { felt: 'Сукно', octagon: 'Октагон MMA', ring: 'Ринг', bar: 'Барная стойка', casino: 'Казино', space: 'Космос', beach: 'Пляж', snow: 'Снег' };
+const MAP_NAMES = { felt: 'Сукно', octagon: 'Октагон MMA', ring: 'Ринг', bar: 'Барная стойка', casino: 'Казино', space: 'Космос', beach: 'Пляж', snow: 'Снег', football: 'Футбольный стадион', basketball: 'Баскетбольная площадка', zen: 'Японский сад' };
 const mapName = (id) => `${MAP_ICONS[id || 'felt'] || ''} ${state?.maps?.[id] || MAP_NAMES[id] || MAP_NAMES.felt}`.trim();
 const mapImg = (id) => `/static/img/maps/${id || 'felt'}.jpg`;
 

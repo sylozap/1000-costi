@@ -1411,6 +1411,122 @@ function buildSnow(renderer, quality) {
   };
 }
 
+// ---------- новые спортивные арены ----------
+function courtTexture(renderer, basketball) {
+  const [c, g] = canvas();
+  g.fillStyle = basketball ? '#b8783f' : '#247447'; g.fillRect(0, 0, SIZE, SIZE);
+  for (let i = 0; i < 16; i++) {
+    g.fillStyle = basketball ? (i % 2 ? '#c58d50' : '#b88046') : (i % 2 ? '#32894c' : '#287a43');
+    g.fillRect(u(-7 + i * 0.875), u(-4.5), 0.875 * PX, 9 * PX);
+  }
+  grain(g, SIZE, SIZE, basketball ? 8 : 16, basketball ? 28 : 62);
+  g.strokeStyle = '#f3f1db'; g.lineWidth = 3;
+  g.strokeRect(u(-6.5), u(-4), 13 * PX, 8 * PX);
+  g.beginPath(); g.moveTo(u(0), u(-4)); g.lineTo(u(0), u(4)); g.stroke();
+  g.beginPath(); g.arc(u(0), u(0), 1.3 * PX, 0, Math.PI * 2); g.stroke();
+  for (const sign of [-1, 1]) {
+    const x = sign < 0 ? -6.5 : 4.3;
+    g.strokeRect(u(x), u(-2.1), 2.2 * PX, 4.2 * PX);
+    if (basketball) {
+      g.beginPath(); g.arc(u(sign * 6), u(0), 3.3 * PX, sign < 0 ? -Math.PI / 2 : Math.PI / 2, sign < 0 ? Math.PI / 2 : Math.PI * 1.5); g.stroke();
+      g.beginPath(); g.arc(u(sign * 4.3), u(0), 0.9 * PX, 0, Math.PI * 2); g.stroke();
+    } else {
+      g.strokeRect(u(sign < 0 ? -6.5 : 5.65), u(-1), 0.85 * PX, 2 * PX);
+      g.beginPath(); g.arc(u(sign * 4.9), u(0), 3, 0, Math.PI * 2); g.fillStyle = '#f3f1db'; g.fill();
+    }
+  }
+  return texture(c, renderer);
+}
+
+function buildSport(renderer, quality, basketball = false) {
+  const group = new THREE.Group();
+  const anim = animator(quality);
+  const white = mat(0xf4f5ec, { roughness: 0.4 });
+  const people = crowd(group, { shape: 'square', r0: 9.2, rows: quality === 'low' ? 1 : 4, seed: basketball ? 134 : 112, gapFront: 6.5 });
+  if (quality !== 'low') flashes(group, anim, people, 53);
+  for (const sign of [-1, 1]) {
+    const x = sign * 6.7;
+    if (basketball) {
+      group.add(mesh(new THREE.CylinderGeometry(0.09, 0.13, 3.5, 12), mat(0x343d48), [sign * 7.2, 1.75, 0]));
+      group.add(mesh(new THREE.BoxGeometry(0.09, 1.15, 2), mat(0xe8f2f4, { transparent: true, opacity: 0.65 }), [x, 3.25, 0]));
+      const hoop = mesh(new THREE.TorusGeometry(0.42, 0.045, 8, 32), mat(0xe65a25), [x - sign * 0.45, 2.8, 0]);
+      hoop.rotation.x = Math.PI / 2; group.add(hoop);
+      for (let i = 0; i < 12; i++) {
+        const a = i * Math.PI / 6;
+        group.add(mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.55, 4), white,
+          [x - sign * 0.45 + Math.cos(a) * 0.32, 2.53, Math.sin(a) * 0.32], false));
+      }
+    } else {
+      for (const z of [-1.5, 1.5]) group.add(mesh(new THREE.CylinderGeometry(0.055, 0.055, 1.8, 12), white, [x, 0.9, z]));
+      group.add(mesh(new THREE.BoxGeometry(0.11, 0.11, 3.1), white, [x, 1.8, 0]));
+      // Сетка за воротами, за пределами зоны бросков.
+      const net = mat(0xd8e8de, { transparent: true, opacity: 0.45 });
+      for (let i = 0; i <= 12; i++) group.add(mesh(new THREE.BoxGeometry(0.018, 1.8, 0.018), net, [x + sign * 0.75, 0.9, -1.5 + i * 0.25], false));
+      for (let i = 0; i <= 7; i++) group.add(mesh(new THREE.BoxGeometry(0.018, 0.018, 3), net, [x + sign * 0.75, i * 0.25, 0], false));
+    }
+  }
+  for (const x of [-7.6, 7.6]) for (const z of [-5.5, 5.5]) {
+    group.add(mesh(new THREE.CylinderGeometry(0.08, 0.14, 5, 10), mat(0x3b4658), [x, 2.5, z]));
+    group.add(mesh(new THREE.BoxGeometry(1.3, 0.5, 0.3), glow(0xfff4cb), [x, 5.1, z]));
+    if (quality !== 'low') beam(group, new THREE.Vector3(x, 5, z), new THREE.Vector3(0, 0, 0), 0xe3f4ff, 2.1, 0.035);
+  }
+  const board = label(renderer, 512, 128, (g, w, h) => {
+    g.fillStyle = '#111d29'; g.fillRect(0, 0, w, h); g.fillStyle = '#e4f6b4';
+    g.textAlign = 'center'; g.font = 'bold 48px sans-serif'; g.fillText(basketball ? 'DICE ARENA' : 'DICE UNITED', w / 2, 62);
+    g.font = '20px sans-serif'; g.fillStyle = '#a8bcc8'; g.fillText('1000 • PLAY TO WIN', w / 2, 100);
+  });
+  group.add(mesh(new THREE.BoxGeometry(4.8, 1.2, 0.15), new THREE.MeshBasicMaterial({ map: board }), [0, 3, -8.5], false));
+  return {
+    floor: courtTexture(renderer, basketball), floorShape: { w: 16, d: 11 },
+    ground: 0x1d2931, clear: 0x101e30, fog: [0x101e30, 24, 65],
+    light: { sky: 0xd9eeff, ground: 0x465e4d, hemi: 1.3, sun: 0xfff4df, sunI: 2 },
+    view: { r: 8.6, z: -0.3, el: 49 }, group, wall: null, update: anim.run,
+  };
+}
+
+function buildZen(renderer, quality) {
+  const [c, g] = canvas();
+  g.fillStyle = '#e5d9b9'; g.fillRect(0, 0, SIZE, SIZE);
+  g.strokeStyle = '#c5b99d'; g.lineWidth = 2;
+  for (let r = 0.8; r < 14; r += 0.18) {
+    g.beginPath(); g.ellipse(u(-5.8), u(-3.8), r * PX, r * PX * 0.65, 0.25, 0, Math.PI * 2); g.stroke();
+  }
+  grain(g, SIZE, SIZE, 12, 99);
+  const group = new THREE.Group();
+  const anim = animator(quality);
+  const rock = mat(0x69716b, { roughness: 1, flatShading: true });
+  for (const [x, z, s] of [[-5,-3,1.1],[-6,2,0.75],[5.4,-3.3,0.85],[6,3.2,1.2]]) {
+    const stone = mesh(new THREE.DodecahedronGeometry(s, 0), rock, [x, s * 0.45, z]); stone.scale.y = 0.65; group.add(stone);
+  }
+  // Деревянные края песчаной площадки.
+  for (const z of [-5, 5]) group.add(mesh(new THREE.BoxGeometry(16, 0.18, 0.22), mat(0x70543a), [0, 0, z]));
+  for (const x of [-8, 8]) group.add(mesh(new THREE.BoxGeometry(0.22, 0.18, 10), mat(0x70543a), [x, 0, 0]));
+  // Красные ворота тории и каменные фонари.
+  const red = mat(0xa84031), dark = mat(0x302f2b);
+  for (const x of [-2, 2]) group.add(mesh(new THREE.CylinderGeometry(0.16, 0.23, 4.2, 12), red, [x, 2.1, -6.2]));
+  group.add(mesh(new THREE.BoxGeometry(5.3, 0.23, 0.45), dark, [0, 4.25, -6.2]));
+  group.add(mesh(new THREE.BoxGeometry(4.8, 0.17, 0.25), red, [0, 3.55, -6.2]));
+  for (const x of [-5.3, 5.3]) {
+    group.add(mesh(new THREE.BoxGeometry(0.3, 1.2, 0.3), rock, [x, 0.6, -4.4]));
+    group.add(mesh(new THREE.BoxGeometry(0.65, 0.6, 0.65), mat(0x777e70), [x, 1.5, -4.4]));
+    group.add(mesh(new THREE.BoxGeometry(0.37, 0.35, 0.67), glow(0xffd998), [x, 1.5, -4.4], false));
+    const roof = mesh(new THREE.ConeGeometry(0.65, 0.4, 4), rock, [x, 2, -4.4]); roof.rotation.y = Math.PI / 4; group.add(roof);
+  }
+  // Сакура за песчаной площадкой.
+  const rnd = rng(723);
+  for (const x of [-7, 7]) {
+    group.add(mesh(new THREE.CylinderGeometry(0.16, 0.32, 3.6, 10), mat(0x574131), [x, 1.8, -5.5]));
+    for (let i = 0; i < (quality === 'low' ? 4 : 9); i++) {
+      group.add(mesh(new THREE.IcosahedronGeometry(0.9 + rnd() * 0.6, 1), mat(i % 2 ? 0xf0b1bc : 0xf6ced2, { roughness: 1 }),
+        [x + (rnd() - 0.5) * 3, 3 + rnd() * 1.8, -5.5 + (rnd() - 0.5) * 2], false));
+    }
+  }
+  return { floor: texture(c, renderer), floorShape: { w: 16, d: 10 }, ground: 0x61745b,
+    clear: 0xc4d2bc, fog: [0xc4d2bc, 23, 65],
+    light: { sky: 0xfff3dc, ground: 0x74826a, hemi: 1.4, sun: 0xffe6bf, sunI: 1.7 },
+    view: { r: 8.1, z: -0.8, el: 48 }, group, wall: null, update: anim.run };
+}
+
 export const MAP_BUILDERS = {
   felt: buildFelt,
   octagon: buildOctagon,
@@ -1420,8 +1536,11 @@ export const MAP_BUILDERS = {
   space: buildSpace,
   beach: buildBeach,
   snow: buildSnow,
+  football: (renderer, quality) => buildSport(renderer, quality),
+  basketball: (renderer, quality) => buildSport(renderer, quality, true),
+  zen: buildZen,
 };
 
 export const MAP_ICONS = {
-  felt: '🟩', octagon: '🤼', ring: '🥊', bar: '🍺', casino: '🎰', space: '🪐', beach: '🏖', snow: '❄️',
+  felt: '🟩', octagon: '🤼', ring: '🥊', bar: '🍺', casino: '🎰', space: '🪐', beach: '🏖', snow: '❄️', football: '⚽', basketball: '🏀', zen: '🌸',
 };
