@@ -303,10 +303,13 @@ button.row:active, .player-row.tappable:active { background: var(--surface-2); }
 .react-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .react-bar button { border: 0; background: var(--surface-2); border-radius: 12px; font-size: 26px; padding: 10px 0; }
 .react-bar .sticker-btn { display: none; }
-.sticker-tray { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
-.sticker-tray button { background: var(--surface-2); border: 0; border-radius: 12px; padding: 8px 2px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.sticker-tray span { font-size: 22px; }
-.sticker-tray small { font-size: 9px; font-weight: 750; line-height: 1.1; text-align: center; color: var(--muted); }
+.sticker-tray { display: flex; flex-direction: column; gap: 12px; }
+.phrase-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; flex-shrink: 0; }
+.phrase-tabs .chip { white-space: nowrap; flex-shrink: 0; }
+.phrase-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.phrase-grid > button { background: var(--surface-2); border: 0; border-radius: 12px; padding: 10px 6px; min-height: 78px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.phrase-grid span { font-size: 22px; }
+.phrase-grid small { font-size: 11px; font-weight: 750; line-height: 1.1; text-align: center; color: var(--muted); }
 .sticker-pop {
   position: absolute; z-index: 4; pointer-events: none; text-align: center;
   background: #fff; color: #111; border-radius: 18px; padding: 8px 14px 6px; box-shadow: 0 8px 24px rgba(0,0,0,.35);

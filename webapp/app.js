@@ -519,6 +519,45 @@ function flyPenalty(uid, text) {
   };
 }
 
+/** Каталог реплик: темы и поиск, сервер проверяет id и ограничивает частоту отправки. */
+function renderPhraseTray(s) {
+  const root = $('stickerTray');
+  const search = el('input', 'input');
+  search.type = 'search'; search.placeholder = 'Найти фразу…';
+  search.setAttribute('aria-label', 'Поиск коротких фраз');
+  const tabs = el('div', 'phrase-tabs');
+  const grid = el('div', 'phrase-grid');
+  let active = 'all';
+  const buttons = [];
+  const groups = s.sticker_groups || {};
+  function filter() {
+    const query = search.value.trim().toLocaleLowerCase('ru');
+    const ids = active === 'all' ? null : groups[active].ids;
+    let count = 0;
+    for (const [id, b, text] of buttons) {
+      const visible = (!ids || ids.includes(id)) && text.toLocaleLowerCase('ru').includes(query);
+      b.classList.toggle('hidden', !visible); count += visible;
+    }
+    empty.classList.toggle('hidden', count > 0);
+    for (const b of tabs.children) b.classList.toggle('on', b.dataset.group === active);
+  }
+  for (const [id, title] of [['all', 'Все'], ...Object.entries(groups).map(([id, g]) => [id, g.title])]) {
+    const b = el('button', 'chip', title); b.dataset.group = id;
+    b.onclick = () => { active = id; filter(); };
+    tabs.appendChild(b);
+  }
+  for (const [id, [emoji, text]] of Object.entries(s.stickers)) {
+    const b = el('button'); b.append(el('span', null, emoji), el('small', null, text));
+    b.onclick = () => {
+      snd.unlock(); send({ type: 'sticker', id }); $('reactSheet').classList.add('hidden');
+    };
+    grid.appendChild(b); buttons.push([id, b, text]);
+  }
+  const empty = el('p', 'note hidden', 'Таких фраз пока нет. Попробуй другое слово.');
+  search.oninput = filter;
+  root.replaceChildren(search, tabs, grid, empty); filter();
+}
+
 function showSticker(m) {
   const el = document.createElement('div');
   el.className = 'sticker-pop';
@@ -936,17 +975,7 @@ function renderGame(s) {
       };
       bar.appendChild(b);
     }
-    const tray = $('stickerTray');
-    for (const [id, [emoji, text]] of Object.entries(s.stickers)) {
-      const b = el('button');
-      b.append(el('span', null, emoji), el('small', null, text));
-      b.onclick = () => {
-        snd.unlock();
-        send({ type: 'sticker', id });
-        $('reactSheet').classList.add('hidden');
-      };
-      tray.appendChild(b);
-    }
+    renderPhraseTray(s);
   }
 
   $('leaveGameBtn').classList.toggle('hidden', !inGame || g.phase === 'finished');

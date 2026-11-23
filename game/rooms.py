@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import config
+from .phrases import STICKERS, STICKER_GROUPS
 from .achievements import ACHIEVEMENTS, CAREER_IDS, career_ids, end_ids, moment_ids
 from .ai import BOT_STYLES, is_bot, wants_stop
 from .engine import TEAM_NAMES, Game, GameError
@@ -29,18 +30,6 @@ MAX_PLAYERS = config.MAX_PLAYERS
 TIMER_OPTIONS = (0, 30, 60, 120)
 ANIMATION_GRACE = 2.5  # секунд на анимацию броска сверх таймера
 REACTIONS = ("😂", "😱", "👏", "🔥", "😭", "🤡", "💩", "🍀")
-STICKERS = {
-    "pit": ("🕳", "В ЯМУ!"),
-    "bolt": ("🔩", "БОЛТ!"),
-    "lucky": ("🍀", "НУ ТЫ И ВЕЗУЧИЙ"),
-    "fart": ("🤑", "ФАРТИТ!"),
-    "truck": ("🚛", "САМОСВАЛ ЕДЕТ"),
-    "go": ("🔥", "ДАВАЙ-ДАВАЙ!"),
-    "gg": ("🤝", "ГГ"),
-    "cheat": ("🤨", "ЖУЛЬНИЧАЕШЬ?"),
-    "wait": ("🐢", "НУ ТЫ ДОЛГО?"),
-    "risk": ("🎲", "РИСКНИ!"),
-}
 GAME_ACTIONS = {"roll", "stop", "order_roll", "order_roll_all"}
 # админ-команды, которым не нужна комната (работают и с экрана «нет игры»)
 ADMIN_GLOBAL_OPS = {"grant_skin", "dice_list", "dice_save", "dice_delete"}
@@ -143,6 +132,7 @@ class Room:
             "max_players": MAX_PLAYERS,
             "reactions": REACTIONS,
             "stickers": {k: list(v) for k, v in STICKERS.items()},
+            "sticker_groups": STICKER_GROUPS,
             "cosmetics": {
                 "gold": [u for u in config.ADMIN_IDS if prefs.get(u, {}).get("gold", True)],
                 "badge": [u for u in config.ADMIN_IDS if prefs.get(u, {}).get("badge", True)],
