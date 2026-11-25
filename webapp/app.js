@@ -1,9 +1,8 @@
-import { lineChart, seriesColor } from './charts.js';
 import { customFaceCanvas, DiceTable, faceCanvas } from './dice3d.js';
 import { MAP_ICONS } from './maps.js';
 import { showDumpTruck } from './truck.js';
 import * as snd from './sound.js';
-import { renderGameDetail, renderProfile, renderRecords } from './views.js';
+import { renderGameDetail, renderMatchReview, renderProfile, renderRecords } from './views.js';
 
 const tg = window.Telegram?.WebApp;
 const $ = (id) => document.getElementById(id);
@@ -207,7 +206,7 @@ function onMessage(m) {
     case 'profile_full':
       registerCustom(m.custom_dice);
       renderProfile($('profileBody'), m, viewCtx);
-      openSheet('profileModal');
+      if ($('profileModal').classList.contains('hidden')) openSheet('profileModal');
       break;
     case 'records':
       renderRecords($('recordsBody'), m, viewCtx);
@@ -604,8 +603,8 @@ function openSheet(id) {
   $(id).querySelector('.modal-card').scrollTop = 0;
 }
 
-function openProfile(uid) {
-  send({ type: 'profile_full', uid });
+function openProfile(uid, filters) {
+  send({ type: 'profile_full', uid, filters });
 }
 
 const viewCtx = {
@@ -614,7 +613,7 @@ const viewCtx = {
   skinSrc: (id) => swatch(id),
   mapName: (id) => mapName(id),
   openGame: (id) => send({ type: 'game_detail', id }),
-  openProfile: (uid) => openProfile(uid),
+  openProfile,
 };
 
 function showMessage(title, text) {
@@ -684,7 +683,6 @@ function render(s) {
   }
   renderGame(s);
   showScreen('screenGame');
-  if (!$('finishModal').classList.contains('hidden') && s.status === 'finished') renderSummary(s);
   if (!$('adminModal').classList.contains('hidden')) renderAdminGame(s);
   if (!$('playerModal').classList.contains('hidden')) renderPlayerSheet(s);
 }
@@ -1136,26 +1134,17 @@ function showFinish(s) {
   $('finishModal').classList.remove('hidden');
 }
 
-/** Графики итогов: счёт по ходам и шансы на победу (цвет закреплён за игроком, не за местом). */
 function renderSummary(s) {
   const g = s.game;
   const sum = g.summary;
   const hl = $('finishHighlights');
-  hl.innerHTML = '';
+  hl.replaceChildren();
   for (const t of sum?.highlights || []) hl.appendChild(el('li', null, t));
-  const players = g.players;
-  const winners = g.winners?.length ? g.winners : [g.winner_uid];
-  const hist = sum?.history || [];
-  lineChart($('summaryChart'), players.map((p, i) => ({
-    name: p.name, color: seriesColor(i), bold: winners.includes(p.uid),
-    values: hist.map((h) => h.scores[p.uid] ?? 0),
-  })), { yMax: Math.max(1000, ...hist.flatMap((h) => Object.values(h.scores))), ticks: [0, 500, 1000], label: 'Счёт игроков по ходам' });
-  const wp = s.winprob_hist || [];
-  $('winprobLabel').classList.toggle('hidden', wp.length < 2);
-  lineChart($('winprobChart'), players.map((p, i) => ({
-    name: p.name, color: seriesColor(i), bold: winners.includes(p.uid),
-    values: wp.map((h) => Math.round(100 * (h.p[p.uid] ?? 0))),
-  })), { yMax: 100, ticks: [0, 50, 100], fmt: (v) => `${v}%`, label: 'Шансы на победу по ходам' });
+  renderMatchReview($('finishReview'), {
+    players: g.players.map((p) => ({ ...p, ...sum?.rows.find((row) => row.uid === p.uid) })),
+    history: sum?.history, winprob: s.winprob_hist, winners: g.winners || [],
+    teams: g.teams, turns: sum?.turns ?? 0, duration: s.duration, comeback: sum?.comeback,
+  });
 }
 
 // ---------- таймер ----------

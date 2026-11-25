@@ -603,3 +603,22 @@ button.row:active, .player-row.tappable:active { background: var(--surface-2); }
   .dump-result strong { font-size: 32px; }
   .dump-result span { font-size: 9px; }
 }
+
+.legend button {
+  display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px;
+  color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+}
+.legend button[aria-pressed="false"] { opacity: .55; text-decoration: line-through; }
+.chart-marker { fill: var(--warn); stroke: var(--surface); stroke-width: 1; cursor: pointer; }
+.chart-marker:focus { stroke: var(--text); stroke-width: 2; }
+.turn-detail { padding: 8px 0; }
+.match-facts { margin: 10px 0; }
+.match-table { overflow-x: auto; margin-top: 8px; }
+.match-table table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.match-table th, .match-table td { padding: 7px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: right; }
+.match-table th:first-child { text-align: left; }
+.stats-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.stats-filters label { display: grid; gap: 4px; min-width: 0; font-size: 12px; color: var(--muted); }
+.stats-filters select { min-width: 0; width: 100%; }
+
+.team-profile-links { justify-content: flex-start; padding: 0 10px 8px; }

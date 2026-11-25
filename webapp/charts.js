@@ -22,82 +22,122 @@ function el(tag, attrs, parent) {
   return e;
 }
 
-function legend(box, series) {
-  const lg = document.createElement('div');
-  lg.className = 'legend';
-  for (const s of series) {
-    const it = document.createElement('span');
-    const i = document.createElement('i');
-    i.style.background = s.color;
-    it.append(i, document.createTextNode(s.name));
-    lg.appendChild(it);
-  }
-  box.appendChild(lg);
-}
-
-/**
- * Линейный график.
- * series: [{ name, color, values: number[], bold? }], все одной длины (точка = ход).
- * opts: { yMax, ticks: number[], fmt: (v) => string, xTitle: (i) => string, label }
- */
+/** Линейный график. xs задаёт номера ходов, null оставляет разрыв в линии. */
 export function lineChart(box, series, opts = {}) {
-  box.innerHTML = '';
+  box.replaceChildren();
   const n = Math.max(0, ...series.map((s) => s.values.length));
   if (n < 2) return;
-  const fmt = opts.fmt || ((v) => String(v));
-  const W = 320, H = 170, L = 34, R = 10, T = 10, B = 20;
+  const xs = opts.xs || Array.from({ length: n }, (_, i) => i);
+  const start = opts.xMin ?? xs[0], end = opts.xMax ?? xs[n - 1];
+  const fmt = opts.fmt || String;
+  const W = 320, H = 170, L = 34, R = 10, T = 13, B = 24;
   const yMax = opts.yMax ?? Math.max(1, ...series.flatMap((s) => s.values));
-  const x = (i) => L + ((W - L - R) * i) / (n - 1);
+  const x = (v) => L + (W - L - R) * (v - start) / Math.max(1, end - start);
   const y = (v) => T + (H - T - B) * (1 - v / yMax);
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', 'aria-label': opts.label || '' }, box);
   for (const v of opts.ticks || [0, yMax / 2, yMax]) {
     el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' }, svg);
     el('text', { x: L - 6, y: y(v) + 3, class: 'axis', 'text-anchor': 'end' }, svg).textContent = fmt(v);
   }
-  el('text', { x: W - R, y: H - 5, class: 'axis', 'text-anchor': 'end' }, svg).textContent = `ходов: ${n - 1}`;
-  for (const s of series) {
-    const pts = s.values.map((v, i) => `${x(i).toFixed(1)},${y(v ?? 0).toFixed(1)}`).join(' ');
-    el('polyline', { points: pts, fill: 'none', stroke: s.color, 'stroke-width': s.bold ? 2.5 : 2,
+  const ticks = [...new Set([start, Math.round((start + end) / 2), end])];
+  ticks.forEach((v, i) => {
+    el('text', { x: x(v), y: H - 5, class: 'axis', 'text-anchor': i === 0 ? 'start' : i === ticks.length - 1 ? 'end' : 'middle' },
+      svg).textContent = opts.xs && i === ticks.length - 1 && opts.turns ? `Ход ${v}` : v;
+  });
+  const paths = series.map((s) => {
+    let path = '', previous = null;
+    s.values.forEach((v, i) => {
+      if (v == null) { previous = null; return; }
+      const px = x(xs[i]), py = y(v);
+      if (previous == null) path += `M${px},${py}h0.01`;
+      else if (opts.step) path += `H${px}V${py}`;
+      else path += `L${px},${py}`;
+      previous = v;
+    });
+    return el('path', { d: path, fill: 'none', stroke: s.color, 'stroke-width': s.bold ? 2.5 : 2,
       'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, svg);
-  }
+  });
   const cross = el('line', { y1: T, y2: H - B, class: 'cross', visibility: 'hidden' }, svg);
   const tip = document.createElement('div');
   tip.className = 'chart-tip hidden';
   box.appendChild(tip);
-  const hit = el('rect', { x: L, y: 0, width: W - L - R, height: H, fill: 'transparent' }, svg);
-  const move = (ev) => {
-    const r = svg.getBoundingClientRect();
-    const px = ((ev.clientX - r.left) / r.width) * W;
-    const i = Math.max(0, Math.min(n - 1, Math.round(((px - L) / (W - L - R)) * (n - 1))));
-    cross.setAttribute('x1', x(i));
-    cross.setAttribute('x2', x(i));
+  const visible = new Set(series.map((_, i) => i));
+  let selected = null;
+  function show(i) {
+    selected = i;
+    cross.setAttribute('x1', x(xs[i]));
+    cross.setAttribute('x2', x(xs[i]));
     cross.setAttribute('visibility', 'visible');
-    const rows = [...series].sort((a, b) => (b.values[i] ?? 0) - (a.values[i] ?? 0));
-    tip.innerHTML = '';
     const head = document.createElement('b');
-    head.textContent = opts.xTitle ? opts.xTitle(i) : `Ход ${i}`;
-    tip.appendChild(head);
-    for (const s of rows) {
+    head.textContent = opts.xTitle?.(i) ?? `Ход ${xs[i]}`;
+    tip.replaceChildren(head);
+    const rows = series.filter((s, j) => visible.has(j) && s.values[i] != null);
+    for (const s of rows.sort((a, b) => b.values[i] - a.values[i])) {
       const d = document.createElement('div');
-      const sw = document.createElement('i');
-      sw.style.background = s.color;
-      const nm = document.createElement('span');
-      nm.textContent = s.name;
-      const v = document.createElement('em');
-      v.textContent = fmt(s.values[i] ?? 0);
-      d.append(sw, nm, v);
-      tip.appendChild(d);
+      const sw = document.createElement('i'); sw.style.background = s.color;
+      const name = document.createElement('span'); name.textContent = s.name;
+      const v = document.createElement('em'); v.textContent = fmt(s.values[i]);
+      d.append(sw, name, v); tip.appendChild(d);
     }
+    if (!rows.length) tip.append('Нет данных');
     tip.classList.remove('hidden');
-    tip.style.left = `${Math.min(62, Math.max(0, (x(i) / W) * 100 - 18))}%`;
-  };
-  hit.addEventListener('pointermove', move);
+    tip.style.left = `${Math.min(62, Math.max(0, x(xs[i]) / W * 100 - 18))}%`;
+    opts.onSelect?.(i);
+  }
+  const hit = el('rect', { x: L, y: 0, width: W - L - R, height: H - B, fill: 'transparent' }, svg);
+  function move(ev) {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) / r.width * W;
+    const i = xs.reduce((best, v, j) => Math.abs(x(v) - px) < Math.abs(x(xs[best]) - px) ? j : best, 0);
+    show(i);
+  }
+  hit.addEventListener('pointermove', (ev) => { if (ev.pointerType === 'mouse') move(ev); });
   hit.addEventListener('pointerdown', move);
-  hit.addEventListener('pointerleave', () => {
-    cross.setAttribute('visibility', 'hidden');
-    tip.classList.add('hidden');
-  });
-  if (series.length > 1) legend(box, series);
+  if (opts.interactive) {
+    svg.setAttribute('tabindex', '0');
+    svg.addEventListener('keydown', (ev) => {
+      const shift = { ArrowLeft: -1, ArrowRight: 1 }[ev.key];
+      if (!shift) return;
+      ev.preventDefault();
+      show(Math.min(n - 1, Math.max(0, (selected ?? 0) + shift)));
+    });
+  } else {
+    hit.addEventListener('pointerleave', () => {
+      cross.setAttribute('visibility', 'hidden');
+      tip.classList.add('hidden');
+    });
+  }
+  for (const [i, label] of opts.markers || []) {
+    const marker = el('circle', { cx: x(xs[i]), cy: T - 5, r: 4, class: 'chart-marker',
+      tabindex: 0, role: 'button', 'aria-label': label }, svg);
+    marker.addEventListener('click', () => show(i));
+    marker.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); show(i); }
+    });
+  }
+  if (series.length > 1) {
+    const legend = document.createElement('div');
+    legend.className = 'legend';
+    series.forEach((s, i) => {
+      const item = document.createElement(opts.interactive ? 'button' : 'span');
+      const swatch = document.createElement('i'); swatch.style.background = s.color;
+      item.append(swatch, document.createTextNode(s.name));
+      if (opts.interactive) {
+        item.type = 'button'; item.setAttribute('aria-pressed', 'true');
+        item.onclick = () => {
+          if (visible.has(i)) {
+            if (visible.size === 1) return;
+            visible.delete(i);
+          } else visible.add(i);
+          item.setAttribute('aria-pressed', String(visible.has(i)));
+          paths[i].setAttribute('visibility', visible.has(i) ? 'visible' : 'hidden');
+          if (selected != null) show(selected);
+        };
+      }
+      legend.appendChild(item);
+    });
+    box.appendChild(legend);
+  }
 }
 
 /**

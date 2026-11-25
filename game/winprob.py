@@ -19,7 +19,7 @@ MAX_STEPS = 3000  # защита от бесконечной партии (на�
 
 def sim_clone(game: Game, rng: random.Random) -> Game:
     """Лёгкая копия партии для симуляции: без журнала и истории."""
-    memo = {id(game.rng): rng, id(game.log): [], id(game.history): [], id(game._new_events): []}
+    memo = {id(game.rng): rng, id(game.log): [], id(game.history): [], id(game._new_events): [], id(game._turn_events): [], id(game.rule_history): []}
     g = copy.deepcopy(game, memo)
     g.quiet = True
     g.last_roll = None

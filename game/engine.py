@@ -12,6 +12,12 @@ from .scoring import score_roll
 
 __all__ = ["Game", "GameError", "Player", "Side", "TARGET", "BARREL_MODES", "TEAM_NAMES"]
 
+TURN_EVENTS = {
+    "commit", "win", "join", "leave", "overtake", "tie_zero", "samosval", "pit_enter",
+    "pit_fail", "barrel_sit", "barrel_knock", "barrel_fall", "barrel_zero", "bolt_penalty",
+    "dot_penalty", "dot_zero", "dot", "timeout", "limit", "hot_saved", "debt", "rules_changed",
+}
+
 TEAM_NAMES = ["🔴 Красные", "🔵 Синие", "🟢 Зелёные", "🟡 Жёлтые"]
 
 @lru_cache(maxsize=32)
@@ -46,6 +52,7 @@ class Side:
     barrel_falls: int = 0
     dots: int = 0
     dot_penalties: int = 0
+    barrel_entered_by: int | None = None
     team: int | None = None  # номер команды (None — одиночный игрок)
 
 
@@ -56,6 +63,11 @@ def new_analytics() -> dict:
         "commits": 0, "commit_pts": 0, "burned": 0, "burned_pts": 0,
         "risky_opps": 0, "risky_rolls": 0, "dec": 0, "dec_good": 0,
         "overtook": {}, "zeroed": {},
+        "detail": {
+            "turns": 0, "successful": 0, "recorded": 0, "burned": {},
+            "deductions": {}, "pit_attempts": 0, "pit_exits": 0, "barrel_entries": 0,
+            "barrel_wins": 0,
+        },
     }
 
 
@@ -120,6 +132,8 @@ class Game:
         self.history: list[dict] = []  # счёт всех игроков после каждого хода — для графика итогов
         self._ev_seq = 0
         self._new_events: list[dict] = []
+        self._turn_events: list[dict] = []
+        self.rule_history = [{"turn": 0, "rules": self.rules}]
         self._reset_turn()
 
     # ---------- правила ----------
@@ -134,7 +148,12 @@ class Game:
         return self.rules["barrel"] in ("points", "knock")
 
     def set_rules(self, rules: dict) -> None:
-        self.rules = normalize(rules)
+        updated = normalize(rules)
+        if not self.quiet and self.phase in ("order", "play") and updated != self.rules:
+            self.rule_history.append({"turn": self.turn_no, "rules": updated})
+            if self.phase == "play":
+                self._ev("rules_changed", "Правила изменились")
+        self.rules = updated
         start = self.rules["barrel_start"]
         for p in self.sides():
             if not self.barrel_mode or p.score < start:
@@ -154,6 +173,7 @@ class Game:
 
     def _reset_turn(self):
         self.turn_points = 0
+        self.turn_result = None
         self.dice_left = 5
         self.must_roll = False
         self.rolls_in_turn = 0
@@ -204,6 +224,8 @@ class Game:
         if len(self.log) > 200:
             self.log = self.log[-200:]
         self._new_events.append(ev)
+        if self.phase != "order" and kind in TURN_EVENTS:
+            self._turn_events.append({k: ev[k] for k in ("kind", "uid", "text")})
         return ev
 
     def _begin(self) -> None:
@@ -212,11 +234,14 @@ class Game:
     def _roll_dice(self, n: int) -> list[int]:
         return [self.rng.randint(1, 6) for _ in range(n)]
 
-    def _set_score(self, p: Player, value: int) -> None:
+    def _set_score(self, p: Player, value: int, reason: str | None = None) -> None:
         """Устанавливает счёт с учётом нуля, самосвала и падения с бочки."""
         r = self.rules
         value = max(0, value)
+        if reason:
+            self._note_loss(p, "deductions", reason, max(0, p.score - value))
         if r["samosval_on"] and value == r["samosval"]:
+            self._note_loss(p, "deductions", "samosval", min(p.score, value))
             value = 0
             p.st["samosvals"] += 1
             p.facts.add("samosval")
@@ -226,6 +251,20 @@ class Game:
             p.on_barrel = False
             p.barrel_attempts = 0
             self._ev("barrel_off", f"🛢 {p.name} слетел(а) с бочки ({p.score})", p.uid)
+
+    def _note_loss(self, p: Player, bucket: str, reason: str, amount: int) -> None:
+        if not self.quiet and amount:
+            totals = p.an["detail"][bucket]
+            totals[reason] = totals.get(reason, 0) + amount
+
+    def _note_recorded(self, p: Player, gain: int) -> None:
+        if not self.quiet:
+            p.an["commits"] += 1
+            p.an["commit_pts"] += self.turn_points
+            d = p.an["detail"]
+            self.turn_result = {"recorded": self.turn_points, "gain": max(0, gain)}
+            d["successful"] += 1
+            d["recorded"] += max(0, gain)
 
     def _check_turn(self, uid: int) -> Player:
         if self.phase != "play":
@@ -322,7 +361,7 @@ class Game:
         self.phase = "play"
         self.current = 0
         self._reset_turn()
-        self._record()
+        self._record(initial=True)
         names = ", ".join(f"{i + 1}. {self.player(u).name}" for i, u in enumerate(self.order))
         self._ev("order_done", f"Порядок ходов: {names}")
 
@@ -406,6 +445,8 @@ class Game:
             # самосвал посреди хода: ход сразу заканчивается, дальше бросать нельзя
             p.opened = True
             p.debt = 0
+            self.turn_result = {"burned": self.turn_points, "reason": "samosval"}
+            self._note_loss(p, "burned", "samosval", self.turn_points)
             self._set_score(p, r["samosval"])
             self._next_turn()
         elif self.barrel == "none" and total >= TARGET:
@@ -452,9 +493,6 @@ class Game:
         p.opened = True
         if r["bolts_reset_on_commit"]:
             p.bolts = 0
-        if not self.quiet:
-            p.an["commits"] += 1
-            p.an["commit_pts"] += self.turn_points
         p.st["best_turn"] = max(p.st["best_turn"], self.turn_points)
         if self.turn_points >= 300:
             p.facts.add("turn300")
@@ -466,11 +504,19 @@ class Game:
             capped = True
         self._ev("commit", f"✍️ {p.name} записал(а) +{self.turn_points} → {new}", p.uid, notable=False)
         self._set_score(p, new)
+        if p.score < new:
+            self.turn_result = {"burned": self.turn_points, "reason": "samosval"}
+            self._note_loss(p, "burned", "samosval", self.turn_points)
+        else:
+            self._note_recorded(p, p.score - old)
         top = self.pit_top(p.score)
         if top is not None and self.pit_top(old) != top:
             self._ev("pit_enter", f"🕳 {p.name} в яме ({p.score}) — выбираться до {top}", p.uid, notable=False)
         if self.barrel_mode and p.score >= r["barrel_start"] and not p.on_barrel:
             p.on_barrel = True
+            if not self.quiet:
+                p.an["detail"]["barrel_entries"] += 1
+                p.side.barrel_entered_by = p.uid
             p.barrel_attempts = 0
             extra = f" (перебор — сажаем на {r['barrel_start']})" if capped else ""
             self._ev("barrel_sit", f"🛢 {p.name} сел(а) на бочку с {p.score}{extra}", p.uid)
@@ -483,7 +529,7 @@ class Game:
                         q.barrel_attempts = 0
                         self._ev("barrel_knock", f"🛢💥 {p.name} сбросил(а) {self.side_name(qs)} с бочки → {max(0, drop_to)}",
                                  q.uid, by=p.uid)
-                        self._set_score(q, drop_to)
+                        self._set_score(q, drop_to, "barrel")
         if p.score > old:
             pen = r["overtake_penalty"]
             # обгоны считаются между сторонами: напарник по команде не соперник
@@ -499,21 +545,21 @@ class Game:
                         self._hit(p, v, "overtook")
                     self._ev("overtake", f"🏎 {p.name} обогнал(а) {qn}: у {qn} −{pen}", q.uid,
                              by=p.uid, amount=pen)
-                    self._set_score(q, q.score - pen)
+                    self._set_score(q, q.score - pen, "overtake")
                 elif qs.score == p.score and old < qs.score and r["tie_rule"] != "none":
                     if r["tie_rule"] == "zero":
                         for v in victims:
                             self._hit(p, v, "zeroed")
                         self._ev("tie_zero", f"🎯 {p.name} ровно сравнялся(-лась) с {qn} — {qn} обнуляется!",
                                  q.uid, by=p.uid, amount=qs.score)
-                        self._set_score(q, 0)
+                        self._set_score(q, 0, "tie")
                     elif pen:
                         for v in victims:
                             self._overtaken(v)
                             self._hit(p, v, "overtook")
                         self._ev("overtake", f"🏎 {p.name} сравнялся(-лась) с {qn}: у {qn} −{pen}", q.uid,
                                  by=p.uid, amount=pen)
-                        self._set_score(q, q.score - pen)
+                        self._set_score(q, q.score - pen, "overtake")
         self._track_last()
         self._next_turn()
 
@@ -575,13 +621,15 @@ class Game:
         else:
             self._ev("bolt_penalty", f"🔩 {p.name}: {r['bolts_limit']}-й болт{lost} — штраф −{r['bolt_penalty']}",
                      p.uid)
-            self._set_score(p, p.score - r["bolt_penalty"])
+            self._set_score(p, p.score - r["bolt_penalty"], "bolt")
 
     def _fail(self, reason: str):
         """Ход сгорел: пустой бросок, перебор (открытая бочка), таймаут или лимит бросков."""
         r = self.rules
         p = self.cur
         burned = self.turn_points
+        self._note_loss(p, "burned", reason, burned)
+        self.turn_result = {"burned": burned, "reason": reason}
         lost = f", сгорело {burned}" if burned else ""
         on_barrel = self.barrel_mode and p.on_barrel
         in_pit = self.pit_top(self.turn_start_score) is not None
@@ -604,12 +652,12 @@ class Game:
                     p.facts.add("barrel_zero")
                     self._ev("barrel_zero", f"💥 {p.name} упал(а) с бочки в {r['barrel_falls']}-й раз — счёт обнулён!",
                              p.uid)
-                    self._set_score(p, 0)
+                    self._set_score(p, 0, "barrel")
                 else:
                     self._ev("barrel_fall",
                              f"🛢💥 {p.name} упал(а) с бочки (падение {p.barrel_falls}/{r['barrel_falls']}): "
                              f"−{r['barrel_penalty']}", p.uid)
-                    self._set_score(p, p.score - r["barrel_penalty"])
+                    self._set_score(p, p.score - r["barrel_penalty"], "barrel")
             else:
                 self._ev("barrel_attempt",
                          f"🛢 {p.name}: попытка на бочке не удалась ({p.barrel_attempts}/{r['barrel_attempts']}){lost}",
@@ -623,10 +671,10 @@ class Game:
                 if p.dot_penalties >= r["dot_penalties_limit"]:
                     p.dot_penalties = 0
                     self._ev("dot_zero", text + f" — {r['dot_penalties_limit']}-й штраф, счёт обнулён!", p.uid)
-                    self._set_score(p, 0)
+                    self._set_score(p, 0, "over")
                 else:
                     self._ev("dot_penalty", text + f" — штраф −{r['dot_penalty']}", p.uid)
-                    self._set_score(p, p.score - r["dot_penalty"])
+                    self._set_score(p, p.score - r["dot_penalty"], "over")
             else:
                 self._ev("dot", text, p.uid, notable=False)
 
@@ -646,6 +694,11 @@ class Game:
 
     def _win(self, p: Player, total: int, text: str | None = None):
         p.st["best_turn"] = max(p.st["best_turn"], self.turn_points)
+        self._note_recorded(p, total - p.score)
+        if not self.quiet and self.barrel_mode and p.on_barrel:
+            entrant = next((m for m in self.members(p.side) if m.uid == p.side.barrel_entered_by), None)
+            if entrant:
+                entrant.an["detail"]["barrel_wins"] += 1
         p.score = total
         p.opened = True
         p.debt = 0
@@ -656,11 +709,21 @@ class Game:
         self._ev("win", text or f"🏆 {who} — {total}, ПОБЕДА!", p.uid)
         self._record()
 
-    def _record(self) -> None:
+    def _record(self, initial: bool = False) -> None:
         if self.quiet:
             return
-        self.history.append({"turn": self.turn_no, "uid": self.cur.uid if self.players else None,
-                             "scores": {str(p.uid): p.score for p in self.players}})
+        p = self.cur
+        if not initial:
+            d = p.an["detail"]
+            d["turns"] += 1
+            top = self.pit_top(self.turn_start_score)
+            if top is not None:
+                d["pit_attempts"] += 1
+                d["pit_exits"] += int(p.score >= top)
+        self.history.append({"turn": 0 if initial else self.turn_no, "uid": None if initial else p.uid,
+                             "scores": {str(p.uid): p.score for p in self.players},
+                             "events": self._turn_events, "result": None if initial else self.turn_result})
+        self._turn_events = []
 
     def _next_turn(self):
         if self.phase != "play":
@@ -753,7 +816,7 @@ class Game:
         for p in self.players:
             st = p.st
             rows.append({"uid": p.uid, "name": p.name, "score": p.score, "team": p.side.team, "best_turn": st["best_turn"],
-                         "samosvals": st["samosvals"], "bolt_penalties": st["bolt_penalties"],
+                         "detail": p.an["detail"], "samosvals": st["samosvals"], "bolt_penalties": st["bolt_penalties"],
                          "overtakes": st["overtakes"], "zeros": st["zeros"], "barrel_falls": st["barrel_falls"]})
         rows.sort(key=lambda r: (r["uid"] not in self.winners, r["uid"] != self.winner, -r["score"], r["team"] or 0))
         highlights = []
@@ -766,10 +829,12 @@ class Game:
                 top = max(rows, key=lambda r: r[key])
                 if top[key]:
                     highlights.append(f"{text} больше всех: {top['name']} ({top[key]})")
+        gap = 0
         if self.winner is not None and self.history:
             w = str(self.winner)
-            gap = max((max(h["scores"].values()) - h["scores"].get(w, 0) for h in self.history), default=0)
+            gap = max((max(h["scores"].values()) - h["scores"][w] for h in self.history if w in h["scores"]), default=0)
             if gap >= 200:
                 name = next((r["name"] for r in rows if r["uid"] == self.winner), "?")
                 highlights.append(f"🔄 Камбэк: {name} отставал(а) на {gap} и победил(а)")
-        return {"rows": rows, "history": self.history[-400:], "highlights": highlights}
+        return {"rows": rows, "history": self.history[-400:], "highlights": highlights,
+                "turns": self.turn_no, "comeback": gap}

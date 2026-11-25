@@ -88,6 +88,7 @@ def game_record(room, now: float | None = None) -> dict:
         "t1": now,
         "map": room.map,
         "preset": room.preset_name(),
+        "rule_history": g.rule_history,
         "teams": g.teams,
         "winners": g.winners,
         "turns": g.turn_no,
@@ -95,8 +96,8 @@ def game_record(room, now: float | None = None) -> dict:
             "uid": p.uid, "name": p.name, "score": p.score, "team": p.side.team, "bot": p.uid < 0,
             "st": p.st, "an": p.an,
         } for p in g.players],
-        "history": g.history[-400:],
-        "winprob": room.winprob_hist[-400:],
+        "history": g.history,
+        "winprob": room.winprob_hist,
         "chat_title": room.chat_title,
         # всё, что нужно, чтобы аннулировать партию: ачивки партии, ставки, вмешательства админа
         "ach": {str(u): sorted(ids) for u, ids in room._announced.items() if ids},
@@ -125,7 +126,7 @@ def _comeback(g: dict) -> int:
     if not g["winners"] or not g["history"]:
         return 0
     w = str(g["winners"][0])
-    return max((max(h["scores"].values()) - h["scores"].get(w, 0) for h in g["history"] if h["scores"]), default=0)
+    return max((max(h["scores"].values()) - h["scores"][w] for h in g["history"] if w in h["scores"]), default=0)
 
 
 def honesty(faces: list[int]) -> dict:
@@ -149,9 +150,28 @@ def _style(risky_rate: int | None) -> str | None:
     return "азартный"
 
 
-def profile(history: History, uid: int, viewer: int | None = None) -> dict:
+def profile(history: History, uid: int, viewer: int | None = None,
+            filters: dict | None = None, chat_id=None) -> dict:
     """Профиль игрока по истории партий: итоги, удача и риск, честность кубиков, соперники, последние партии."""
     games = sorted(history.of_user(uid), key=lambda g: g["t1"])
+    presets = sorted({g.get("preset") for g in games if g.get("preset")})
+    filters = filters if isinstance(filters, dict) else {}
+    valid = {
+        "period": ("all", "30", "90"), "chat": ("all", "current") if chat_id is not None else ("all",),
+        "mode": ("all", "solo", "teams"), "opponents": ("all", "human", "bot"), "preset": ("", *presets),
+    }
+    selected = {k: filters[k] if filters.get(k) in options else options[0] for k, options in valid.items()}
+    cutoff = time.time() - int(selected["period"]) * 86400 if selected["period"] != "all" else 0
+    games = [g for g in games if (
+        g["t1"] >= cutoff
+        and (selected["chat"] == "all" or g.get("chat") == chat_id)
+        and (selected["mode"] == "all" or g["teams"] == (selected["mode"] == "teams"))
+        and (selected["opponents"] == "all" or any(p["bot"] for p in g["players"]) == (selected["opponents"] == "bot"))
+        and (not selected["preset"] or g.get("preset") == selected["preset"])
+    )]
+    detail = {k: 0 for k in ("games", "turns", "successful", "recorded", "pit_attempts", "pit_exits",
+                             "barrel_entries", "barrel_wins")}
+    detail.update(burned={}, deductions={})
     agg = {k: 0 for k in ("turns", "rolls", "pts", "commits", "commit_pts", "burned", "burned_pts",
                           "risky_opps", "risky_rolls", "dec", "dec_good", "samosvals", "overtakes")}
     exp = 0.0
@@ -189,7 +209,17 @@ def profile(history: History, uid: int, viewer: int | None = None) -> dict:
             r["hits"] += a.get("overtook", {}).get(str(q["uid"]), 0) + a.get("zeroed", {}).get(str(q["uid"]), 0)
             qa = q["an"]
             r["hit_by"] += qa.get("overtook", {}).get(str(uid), 0) + qa.get("zeroed", {}).get(str(uid), 0)
-        recent.append({"id": g["id"], "t": g["t1"], "won": won, "score": me["score"], "place": _place(g, uid),
+        d = a.get("detail")
+        if d is not None:
+            detail["games"] += 1
+            for key in ("turns", "successful", "recorded", "pit_attempts", "pit_exits", "barrel_entries", "barrel_wins"):
+                detail[key] += d[key]
+            for key in ("burned", "deductions"):
+                for reason, amount in d[key].items():
+                    detail[key][reason] = detail[key].get(reason, 0) + amount
+        recent.append({"form_turn": round(d["recorded"] / d["turns"], 1) if d and d["turns"] else None,
+                       "form_success": _pct(d["successful"], d["turns"]) if d else None,
+                       "id": g["id"], "t": g["t1"], "won": won, "score": me["score"], "place": _place(g, uid),
                        "players": len(g["players"]), "map": g.get("map"), "teams": g["teams"]})
     risky_rate = _pct(agg["risky_rolls"], agg["risky_opps"])
     rival_list = sorted(rivals.values(), key=lambda r: -r["games"])
@@ -197,6 +227,9 @@ def profile(history: History, uid: int, viewer: int | None = None) -> dict:
     victim = max((r for r in rival_list if r["hits"] > 0), key=lambda r: r["hits"], default=None)
     return {
         "uid": uid,
+        "filters": selected, "presets": presets, "chat_filter": chat_id is not None,
+        "detail": detail, "rolls_n": agg["rolls"], "risky_n": agg["risky_opps"],
+        "form": recent[-20:],
         "games": len(games), "wins": wins, "win_rate": _pct(wins, len(games)),
         "streak": streak, "best_streak": best_streak, "best_turn": best_turn,
         "samosvals": agg["samosvals"], "overtakes": agg["overtakes"],

@@ -176,3 +176,53 @@ def test_winprob_in_room(tmp_path, monkeypatch):
         st = room.state()
         assert st["winprob_hist"] and max(st["winprob_hist"][-1]["p"].values()) == 1.0
     run(go())
+
+
+def test_turn_review_distinguishes_lost_turn_points_and_score_deductions():
+    from tests.test_engine import make
+
+    g, rng = make()
+    player = g.cur
+    player.score, player.opened = 525, True
+    g.turn_start_score = 525
+    rng.push(3, 3, 3, 2, 4)
+    g.roll(player.uid)
+    assert g.history[0]["turn"] == 0
+    row = g.history[-1]
+    assert (row["turn"], row["uid"], row["scores"]["1"]) == (1, 1, 0)
+    assert row["result"] == {"burned": 30, "reason": "samosval"}
+    assert [event["kind"] for event in row["events"]] == ["samosval"]
+    assert player.an["detail"]["burned"] == {"samosval": 30}
+    assert player.an["detail"]["deductions"] == {"samosval": 525}
+
+    winner = g.cur
+    rng.push(1, 1, 1, 1, 1)
+    g.roll(winner.uid)
+    assert g.summary()["history"][-1]["result"] == {"recorded": 1000, "gain": 1000}
+    assert winner.an["commit_pts"] == 1000
+    assert winner.an["commits"] == winner.an["detail"]["successful"] == 1
+
+
+def test_profile_filters_and_legacy_coverage(tmp_path):
+    async def go():
+        manager, room = setup(tmp_path)
+        w1, w2 = await lobby(room, (1, "Вася"), (2, "Петя"))
+        from tests.test_admin_games import win_game
+
+        await win_game(room, w1, w2)
+        latest = manager.history.games[0]
+        old_player = dict(latest["players"][0], an={})
+        legacy = dict(latest, id="old", chat=-2, t1=latest["t1"] - 100 * 86400,
+                      players=[old_player, latest["players"][1]], preset="Старый")
+        manager.history.add(legacy)
+        await room.handle(1, "Вася", {"type": "profile_full", "filters": {
+            "chat": "current", "period": "30", "mode": "solo", "opponents": "human", "preset": "Классика",
+        }}, w1)
+        result = w1.last("profile_full")
+        assert result["games"] == result["detail"]["games"] == 1
+        assert result["form"][0]["form_turn"] == 1000
+        assert latest["rule_history"][0]["rules"]["barrel"] == "none"
+        assert profile(manager.history, 1)["games"] == 2
+        assert profile(manager.history, 1)["detail"]["games"] == 1
+
+    run(go())

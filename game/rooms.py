@@ -73,6 +73,7 @@ class Room:
         self.teams_mode = False
         self.team_of: dict[int, int] = {}  # uid → номер команды (командная игра, пары)
         self.started_at: float | None = None
+        self.duration: int | None = None
         self.winprob: dict[str, float] = {}  # шансы на победу сейчас (uid → 0..1)
         self.winprob_hist: list[dict] = []  # шансы после каждого хода — для графика итогов
         self._wp_turn: int | None = None
@@ -128,6 +129,7 @@ class Room:
             "paused": self.paused,
             "game": self.game.to_dict() if self.game else None,
             "deadline": int(self.deadline * 1000) if self.deadline else None,
+            "duration": self.duration,
             "server_now": int(time.time() * 1000),
             "max_players": MAX_PLAYERS,
             "reactions": REACTIONS,
@@ -248,7 +250,7 @@ class Room:
 
         if action == "profile_full":
             target = int(msg.get("uid") or uid)
-            await self.send_to(ws, self.manager.profile_full(target, viewer=uid))
+            await self.send_to(ws, self.manager.profile_full(target, viewer=uid, filters=msg.get("filters"), chat_id=self.chat_id))
             return
 
         if action == "records":
@@ -408,6 +410,7 @@ class Room:
             self.game = Game(list(self.members.items()), rules=self.rules, teams=teams)
             self.status = "game"
             self.started_at = time.time()
+            self.duration = None
             self.winprob, self.winprob_hist, self._wp_turn = {}, [], None
             self._announced = {}
             self.rigged = False
@@ -555,9 +558,10 @@ class Room:
             await self._check_achievements(final=False)
             if self.game.phase == "finished":
                 self.status = "finished"
+                self.duration = round(time.time() - self.started_at) if self.started_at is not None else None
                 self._cancel_timer()
                 self.winprob = {str(p.uid): float(p.uid in self.game.winners) for p in self.game.players}
-                self.winprob_hist.append({"turn": self.game.turn_no, "p": self.winprob})
+                self.winprob_hist.append({"turn": self.game.turn_no, "p": self.winprob, "final": True})
                 if self.game.winner is not None:
                     self.manager.record(self)
                     await self._check_achievements(final=True)
@@ -998,13 +1002,13 @@ class RoomManager:
         self.history.remove(gid)
         return "Партия удалена навсегда"
 
-    def profile_full(self, uid: int, viewer: int | None = None) -> dict:
+    def profile_full(self, uid: int, viewer: int | None = None, filters: dict | None = None, chat_id=None) -> dict:
         """Полный профиль: аналитика по истории + карьерная статистика, ачивки, скин, фишки."""
         admin = is_admin(uid)
         gold = self.admin_prefs.get(uid, {}).get("gold", True)
         total = self.stats.user_total(uid) if self.stats else None
         ach = self.achievements_of(uid)
-        return {"type": "profile_full", **profile(self.history, uid, viewer),
+        return {"type": "profile_full", **profile(self.history, uid, viewer, filters, chat_id),
                 "name": (total or {}).get("name") or self._name_of(uid),
                 "career": total, "chips": self.profiles.chips(uid), "skin": self.profiles.skin(uid, admin, gold),
                 "custom_dice": self.custom_views([self.profiles.skin(uid, admin, gold)]),

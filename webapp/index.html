@@ -6,7 +6,7 @@
   <title>1000 — кости</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/theme.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=8">
+  <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
   <div id="app">
@@ -234,10 +234,7 @@
       <h2 id="finishTitle"></h2>
       <div class="list card flat ranking" id="ranking"></div>
       <div class="finish-bank hidden" id="finishBank"></div>
-      <div class="field-label">Счёт по ходам</div>
-      <div class="chart-box" id="summaryChart"></div>
-      <div class="field-label" id="winprobLabel">Шансы на победу</div>
-      <div class="chart-box" id="winprobChart"></div>
+      <div id="finishReview"></div>
       <ul class="highlights" id="finishHighlights"></ul>
       <div class="finish-ach" id="finishAch"></div>
       <div class="row-btns">
@@ -439,6 +436,6 @@
 
   <div id="errorToast" class="error-toast hidden"></div>
 
-  <script type="module" src="/static/app.js?v=10"></script>
+  <script type="module" src="/static/app.js?v=11"></script>
 </body>
 </html>
