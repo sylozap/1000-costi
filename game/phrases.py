@@ -75,5 +75,8 @@ PHRASE_GROUPS = {
     }),
 }
 
-STICKERS = {sid: phrase for _, phrases in PHRASE_GROUPS.values() for sid, phrase in phrases.items()}
+CLASSIC_ORDER = ("pit", "bolt", "lucky", "fart", "truck", "go", "gg", "cheat", "wait", "risk")
+
+_catalog = {sid: phrase for _, phrases in PHRASE_GROUPS.values() for sid, phrase in phrases.items()}
+STICKERS = {**{sid: _catalog[sid] for sid in CLASSIC_ORDER}, **_catalog}
 STICKER_GROUPS = {key: {"title": title, "ids": list(phrases)} for key, (title, phrases) in PHRASE_GROUPS.items()}
