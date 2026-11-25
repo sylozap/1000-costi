@@ -140,7 +140,14 @@ export function knock(strength = 1) {
       tone(120, t, 0.18, { type: 'triangle', gain: 0.22 * k, slide: -50 });
       tone(95, t + 0.07, 0.12, { type: 'triangle', gain: 0.08 * k });
       break;
-    case 'basketball': // паркет
+    case 'basketball':
+      tone(172, t, 0.10, { type: 'triangle', gain: 0.27 * k, slide: -77 });
+      noise(t, 0.035, { freq: 1550, q: 3, gain: 0.37 * k });
+      break;
+    case 'pirate':
+      tone(260, t, 0.12, { type: 'triangle', gain: 0.22 * k, slide: -75 });
+      noise(t, 0.07, { freq: 730, q: 3.5, gain: 0.42 * k });
+      break;
     case 'bar': // дерево: «ток»
       noise(t, 0.05, { type: 'bandpass', freq: 1100 + Math.random() * 400, q: 5, gain: 0.8 * k });
       tone(420 + Math.random() * 80, t, 0.07, { type: 'triangle', gain: 0.18 * k });
@@ -156,8 +163,14 @@ export function knock(strength = 1) {
         tone(3500 + Math.random() * 300, t + d, 0.15, { gain: g * 0.6 });
       });
       break;
-    case 'football': // мягкий газон
-    case 'zen': //
+    case 'football':
+      tone(95, t, 0.08, { gain: 0.21 * k, slide: -35 });
+      noise(t, 0.085, { type: 'lowpass', freq: 490, gain: 0.38 * k });
+      break;
+    case 'zen':
+      tone(460, t, 0.07, { type: 'triangle', gain: 0.17 * k });
+      noise(t + 0.01, 0.08, { type: 'highpass', freq: 2700, gain: 0.21 * k });
+      break;
     case 'beach': // мягкий шлепок в песок
       noise(t, 0.16, { type: 'lowpass', freq: 650, q: 0.5, gain: 0.45 * k, attack: 0.01 });
       noise(t + 0.02, 0.12, { type: 'highpass', freq: 3000, q: 0.5, gain: 0.08 * k });
@@ -301,6 +314,67 @@ const SFX = {
   // пляж
   waveWash() { const t = ctx.currentTime; noise(t, 1.8, { type: 'lowpass', freq: 900, q: 0.6, gain: 0.55, attack: 0.6 }); noise(t + 0.6, 1.2, { type: 'highpass', freq: 3500, q: 0.5, gain: 0.08, attack: 0.3 }); },
   seagull() { seagull(ctx.currentTime, 0.09); },
+  referee() {
+    const t = ctx.currentTime;
+    for (const d of [0, 0.18]) {
+      tone(2690, t + d, 0.14, { gain: 0.09, slide: -170 });
+      tone(2840, t + d, 0.12, { gain: 0.04 });
+    }
+  },
+  goalRoar() {
+    const t = ctx.currentTime;
+    noise(t, 1.25, { freq: 820, q: 0.7, attack: 0.14, gain: 0.39 });
+    for (const d of [0.08, 0.23, 0.41]) tone(395, t + d, 0.22, { type: 'sawtooth', gain: 0.04, slide: 38 });
+  },
+  missedGoal() {
+    noise(ctx.currentTime, 0.46, { freq: 440, q: 1.2, attack: 0.08, gain: 0.27 });
+  },
+  dribble() {
+    const t = ctx.currentTime;
+    for (const d of [0, 0.24, 0.41]) {
+      tone(145, t + d, 0.13, { type: 'triangle', gain: 0.23, slide: -72 });
+      noise(t + d, 0.046, { freq: 940, q: 2.2, gain: 0.3 });
+    }
+  },
+  swish() {
+    const t = ctx.currentTime;
+    noise(t, 0.29, { freq: 2460, q: 0.65, attack: 0.045, gain: 0.35 });
+    tone(130, t + 0.12, 0.09, { gain: 0.1, slide: -53 });
+  },
+  courtBuzzer() {
+    const t = ctx.currentTime;
+    tone(138, t, 0.58, { type: 'sawtooth', gain: 0.085 });
+    tone(277, t, 0.54, { type: 'square', gain: 0.042 });
+  },
+  bamboo() {
+    const t = ctx.currentTime;
+    tone(525, t, 0.17, { type: 'triangle', gain: 0.13 });
+    tone(1100, t, 0.07, { gain: 0.065 });
+    noise(t + 0.08, 0.27, { type: 'lowpass', freq: 1180, gain: 0.15, attack: 0.05 });
+  },
+  gardenChime() {
+    const t = ctx.currentTime;
+    [988, 1319, 1661].forEach((f, i) => tone(f, t + i * 0.14, 0.72, { gain: 0.075 }));
+  },
+  shipBell() {
+    const t = ctx.currentTime;
+    for (const [f, gain] of [[385, 0.13], [726, 0.08], [1120, 0.05], [1694, 0.035]]) {
+      tone(f, t, 1.25, { gain });
+    }
+    noise(t, 1, { type: 'lowpass', freq: 870, attack: 0.27, gain: 0.18 });
+  },
+  shipCreak() {
+    const t = ctx.currentTime;
+    tone(156, t, 0.33, { type: 'sawtooth', gain: 0.055, slide: -64 });
+    noise(t, 0.27, { freq: 670, q: 4, gain: 0.24 });
+  },
+  pirateCoins() {
+    const t = ctx.currentTime;
+    [1870, 2320, 1720, 2620, 2110, 3080].forEach((f, i) => {
+      tone(f, t + i * 0.051, 0.23, { gain: 0.075 });
+      noise(t + i * 0.051, 0.032, { freq: f, q: 4, gain: 0.14 });
+    });
+  },
   // снег
   sleigh() { sleigh(ctx.currentTime, 0.06); },
   creak() {

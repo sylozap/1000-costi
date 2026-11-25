@@ -59,9 +59,10 @@ const MAP_SFX = {
   space: { preview: 'whoosh', throw: 'whoosh', commit: 'laser', zero: 'powerDown', samosval: 'powerDown', win: 'warp' },
   beach: { preview: 'seagull', zero: 'waveWash', big: 'seagull', win: 'seagull' },
   snow: { preview: 'sleigh', commit: 'sleigh', zero: 'creak', win: 'sleigh' },
-  football: { preview: 'crowd', big: 'crowd', win: 'crowd' },
-  basketball: { preview: 'bell', big: 'crowd', win: 'crowd' },
-  zen: { preview: 'clink', big: 'clink', win: 'clink' },
+  football: { preview: 'referee', start: 'referee', big: 'goalRoar', win: 'goalRoar', zero: 'missedGoal' },
+  basketball: { preview: 'dribble', start: 'courtBuzzer', big: 'swish', commit: 'swish', win: 'courtBuzzer' },
+  zen: { preview: 'bamboo', start: 'bamboo', big: 'gardenChime', commit: 'bamboo', win: 'gardenChime' },
+  pirate: { preview: 'shipBell', start: 'shipBell', big: 'pirateCoins', zero: 'shipCreak', wall: 'shipCreak', win: 'pirateCoins' },
 };
 const mapId = () => state?.settings?.map || 'felt';
 const isFightMap = () => mapId() === 'octagon' || mapId() === 'ring';
