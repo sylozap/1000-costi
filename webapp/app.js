@@ -693,7 +693,7 @@ function canEditRules(s) {
 }
 
 const TEAM_COLORS = ['#e5484d', '#3e7bfa', '#2fb67c', '#e8b10e'];
-const MAP_NAMES = { felt: 'Сукно', octagon: 'Октагон MMA', ring: 'Ринг', bar: 'Барная стойка', casino: 'Казино', space: 'Космос', beach: 'Пляж', snow: 'Снег', football: 'Футбольный стадион', basketball: 'Баскетбольная площадка', zen: 'Японский сад' };
+const MAP_NAMES = { felt: 'Сукно', octagon: 'Октагон MMA', ring: 'Ринг', bar: 'Барная стойка', casino: 'Казино', space: 'Космос', beach: 'Пляж', snow: 'Снег', football: 'Футбольный стадион', basketball: 'Баскетбольная площадка', zen: 'Японский сад', pirate: 'Пиратская палуба' };
 const mapName = (id) => `${MAP_ICONS[id || 'felt'] || ''} ${state?.maps?.[id] || MAP_NAMES[id] || MAP_NAMES.felt}`.trim();
 const mapImg = (id) => `/static/img/maps/${id || 'felt'}.jpg`;
 

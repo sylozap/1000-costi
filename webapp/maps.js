@@ -1527,6 +1527,66 @@ function buildZen(renderer, quality) {
     view: { r: 8.1, z: -0.8, el: 48 }, group, wall: null, update: anim.run };
 }
 
+function buildPirate(renderer, quality) {
+  const [c, g] = canvas();
+  woodCanvas(g, SIZE, SIZE, [139, 88, 53], 137, 68);
+  grain(g, SIZE, SIZE, 11, 93);
+  const group = new THREE.Group();
+  const anim = animator(quality);
+  const timber = mat(0x75462f);
+  const trim = mat(0x3c261e);
+  const brass = mat(0xb08745, { metalness: 0.4 });
+  const box = (w, h, d, material, pos) => mesh(new THREE.BoxGeometry(w, h, d), material, pos);
+  for (const z of [-3.9, 3.9]) {
+    group.add(box(11.4, z < 0 ? 0.78 : 0.25, 0.22, timber, [0, z < 0 ? 0.4 : 0.12, z]));
+    for (const x of [-5.4, -3.6, -1.8, 0, 1.8, 3.6, 5.4]) {
+      group.add(box(0.21, z < 0 ? 1.04 : 0.4, 0.28, trim, [x, z < 0 ? 0.49 : 0.18, z]));
+    }
+  }
+  for (const x of [-5.65, 5.65]) group.add(box(0.23, 0.47, 8, timber, [x, 0.23, 0]));
+  group.add(box(11.6, 1.2, 8.1, trim, [0, -0.64, 0]));
+  for (const [x, z] of [[-4.6, -2.8], [-3.55, -3.05], [4.7, 2.7]]) {
+    group.add(mesh(new THREE.CylinderGeometry(0.37, 0.43, 0.81, 12), timber, [x, 0.41, z]));
+    for (const y of [0.22, 0.63]) group.add(mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.08, 12), trim, [x, y, z]));
+  }
+  group.add(box(1.55, 0.73, 0.85, trim, [4.3, 0.37, -2.85]));
+  group.add(box(1.63, 0.19, 0.91, timber, [4.3, 0.79, -2.85]));
+  for (const x of [3.73, 4.87]) group.add(box(0.09, 0.86, 0.94, brass, [x, 0.46, -2.85]));
+  group.add(box(0.16, 0.23, 0.05, brass, [4.3, 0.67, -2.4]));
+  const rope = mat(0xb99b65);
+  for (let i = 0; i < 4; i++) {
+    const coil = mesh(new THREE.TorusGeometry(0.25 + i * 0.075, 0.041, 5, 20), rope, [-4.7, 0.07, 2.7]);
+    coil.rotation.x = Math.PI / 2; group.add(coil);
+  }
+  for (const x of [-4.3, 4.3]) {
+    group.add(box(0.15, 2.6, 0.15, trim, [x, 1.3, -3.82]));
+    group.add(box(0.15, 0.12, 0.52, trim, [x, 2.56, -3.62]));
+    const lantern = new THREE.Group();
+    lantern.position.set(x, 2.55, -3.37);
+    lantern.add(box(0.32, 0.38, 0.32, glow(0xffc373), [0, -0.34, 0]));
+    for (const y of [-0.14, -0.56]) lantern.add(box(0.4, 0.08, 0.4, trim, [0, y, 0]));
+    group.add(lantern);
+    anim.add((now) => { lantern.rotation.z = Math.sin(now / 1050 + x) * 0.14; return true; }, true);
+  }
+  const sea = mesh(new THREE.PlaneGeometry(105, 105, 28, 28), mat(0x245d69, { roughness: 0.36 }), [0, -1.1, 0], false);
+  sea.rotation.x = -Math.PI / 2;
+  group.add(sea);
+  anim.add((now) => {
+    const pos = sea.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) pos.setZ(i, Math.sin(pos.getX(i) * 0.43 + now / 950) * 0.22
+      + Math.sin(pos.getY(i) * 0.55 - now / 1450) * 0.18);
+    pos.needsUpdate = true;
+    sea.geometry.computeVertexNormals();
+    return true;
+  }, true);
+  const sun = mesh(new THREE.SphereGeometry(3.4, 18, 12), glow(0xffba76), [-20, 5.8, -33], false);
+  group.add(sun);
+  return { floor: texture(c, renderer), floorShape: { w: 11.4, d: 8 },
+    ground: null, clear: 0xc77f70, fog: [0xc77f70, 31, 70],
+    light: { sky: 0xffbd8d, ground: 0x46566b, hemi: 1.55, sun: 0xffd196, sunI: 2 },
+    view: { r: 8.9, z: -0.55, el: 43 }, group, wall: { type: 'box', hx: 5.42, hz: 3.78 }, update: anim.run };
+}
+
 export const MAP_BUILDERS = {
   felt: buildFelt,
   octagon: buildOctagon,
@@ -1539,8 +1599,9 @@ export const MAP_BUILDERS = {
   football: (renderer, quality) => buildSport(renderer, quality),
   basketball: (renderer, quality) => buildSport(renderer, quality, true),
   zen: buildZen,
+  pirate: buildPirate,
 };
 
 export const MAP_ICONS = {
-  felt: '🟩', octagon: '🤼', ring: '🥊', bar: '🍺', casino: '🎰', space: '🪐', beach: '🏖', snow: '❄️', football: '⚽', basketball: '🏀', zen: '🌸',
+  felt: '🟩', octagon: '🤼', ring: '🥊', bar: '🍺', casino: '🎰', space: '🪐', beach: '🏖', snow: '❄️', football: '⚽', basketball: '🏀', zen: '🌸', pirate: '🏴‍☠️',
 };
