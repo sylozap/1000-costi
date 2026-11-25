@@ -67,12 +67,61 @@ export const SKINS = {
   ice: { bg: ['#f2fdff', '#93d3ec'], pip: ['#1d6fb8', '#0b3d6e'], one: ['#1d6fb8', '#0b3d6e'], metal: 0.1, rough: 0.08, pattern: 'ice' },
   candy: { bg: ['#ffffff', '#ffe9f2'], pip: ['#e3266f', '#9c0f45'], one: ['#e3266f', '#9c0f45'], metal: 0, rough: 0.25, pattern: 'candy' },
   prism: { bg: ['#f1fbf4', '#b1d9d5'], pip: ['#f6da7b', '#725822'], one: ['#ffaf95', '#9b3455'], metal: 0.12, rough: 0.12, pattern: 'prism', numerals: true },
+  lava: { bg: ['#3b3030', '#161018'], pip: ['#fff9d5', '#ffbd66'], one: WHITE, metal: 0, rough: 0.75, pattern: 'lava' },
+  nebula: { bg: ['#2d235a', '#080e28'], pip: WHITE, metal: 0, rough: 0.24, pattern: 'nebula', numerals: true },
+  bronze: { bg: ['#d6aa70', '#92603c'], pip: ['#382216', '#21130c'], one: ['#382216', '#21130c'], metal: 0.35, rough: 0.45, pattern: 'bronze' },
+  gzhel: { bg: ['#ffffff', '#dbe8f8'], pip: ['#205db0', '#102a68'], one: ['#205db0', '#102a68'], metal: 0, rough: 0.22, pattern: 'gzhel' },
+  circuit: { bg: ['#124c3e', '#082822'], pip: ['#eefbd4', '#b5eba5'], metal: 0, rough: 0.38, pattern: 'circuit', numerals: true },
   bone: { bg: ['#f4ebd3', '#c4b38a'], pip: ['#4a3420', '#21150a'], one: ['#8a2a14', '#4a0f05'], metal: 0, rough: 0.7, pattern: 'bone' },
 };
 
 function skinPattern(g, s, kind, v) {
   const rnd = mulberry32(v * 97 + kind.length);
-  if (kind === 'prism') {
+  if (kind === 'lava') {
+    for (let i = 0; i < 9; i++) {
+      const x = rnd() * s;
+      g.beginPath(); g.moveTo(x, 0);
+      for (let j = 1; j <= 6; j++) g.lineTo(x + (rnd() - 0.5) * 85, j * s / 6);
+      g.strokeStyle = '#79301f'; g.lineWidth = 8; g.stroke();
+      g.strokeStyle = '#ff863d'; g.lineWidth = 2; g.stroke();
+    }
+  } else if (kind === 'nebula') {
+    for (let i = 0; i < 12; i++) {
+      const x = rnd() * s, y = rnd() * s;
+      const halo = g.createRadialGradient(x, y, 0, x, y, 65 + rnd() * 60);
+      halo.addColorStop(0, i % 2 ? '#a64acc60' : '#456fea65');
+      halo.addColorStop(1, '#00000000');
+      g.fillStyle = halo; g.fillRect(0, 0, s, s);
+    }
+    g.fillStyle = '#ffffffbb';
+    for (let i = 0; i < 80; i++) g.fillRect(rnd() * s, rnd() * s, 1 + rnd() * 2, 1 + rnd() * 2);
+  } else if (kind === 'bronze') {
+    for (let i = 0; i < 220; i++) {
+      g.fillStyle = i % 3 === 0 ? '#28675a50' : '#f3c89645';
+      g.fillRect(rnd() * s, rnd() * s, 1 + rnd() * 8, 1 + rnd() * 4);
+    }
+  } else if (kind === 'gzhel') {
+    for (let edge = 0; edge < 4; edge++) {
+      g.save(); g.translate(s / 2, s / 2); g.rotate(edge * Math.PI / 2);
+      for (let x = -96; x <= 96; x += 32) {
+        g.beginPath(); g.ellipse(x, -109, 11, 4, Math.PI / 5, 0, Math.PI * 2);
+        g.fillStyle = '#2464b1'; g.fill();
+        g.beginPath(); g.ellipse(x + 8, -113, 3, 7, -Math.PI / 5, 0, Math.PI * 2); g.fill();
+      }
+      g.restore();
+    }
+  } else if (kind === 'circuit') {
+    g.strokeStyle = '#cba554'; g.fillStyle = '#cba554'; g.lineWidth = 2;
+    for (const side of [0, s]) {
+      for (let y = 22; y < s; y += 24) {
+        const sign = side === 0 ? 1 : -1;
+        const end = side + sign * (26 + rnd() * 35);
+        g.beginPath(); g.moveTo(side, y); g.lineTo(end - sign * 12, y);
+        g.lineTo(end, y + 12); g.stroke();
+        g.beginPath(); g.arc(end, y + 12, 3, 0, Math.PI * 2); g.fill();
+      }
+    }
+  } else if (kind === 'prism') {
     // Слои цветной смолы и полупрозрачные иридисцентные осколки.
     const colors = ['35,202,203', '245,112,152', '254,197,83', '112,132,244', '125,225,183'];
     for (let i = 0; i < 28; i++) {
@@ -166,8 +215,9 @@ export function faceCanvas(v, skin = 'ivory') {
     g.font = 'bold 178px Georgia, serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.lineJoin = 'round'; g.lineWidth = 7; g.strokeStyle = 'rgba(255,255,235,0.95)';
     g.shadowColor = 'rgba(30,51,63,0.45)'; g.shadowBlur = 5; g.shadowOffsetY = 3;
+    if (skin !== 'prism') g.strokeStyle = '#101a24';
     g.strokeText(String(v), s / 2, s / 2 + 10);
-    g.fillStyle = colors[v - 1]; g.fillText(String(v), s / 2, s / 2 + 10);
+    g.fillStyle = skin === 'prism' ? colors[v - 1] : sk.pip[0]; g.fillText(String(v), s / 2, s / 2 + 10);
     if (v === 6) { g.shadowBlur = 0; g.fillRect(s / 2 - 28, 214, 56, 5); }
     return c;
   }
