@@ -1,98 +1,20 @@
-"""Правила игры «1000» в кости. Чистая логика без сети; все числа берутся из словаря правил."""
+"""Правила игры и переходы между состояниями партии."""
 from __future__ import annotations
 
-import itertools
-import json
 import random
-from functools import lru_cache
-from dataclasses import dataclass, field
 
-from .rules import BARREL_MODES, TARGET, normalize, risk_table
-from .scoring import score_roll
+from ..rules import BARREL_MODES, TARGET, normalize
+from ..scoring import score_roll
+from .analytics import note_decision, note_roll
+from .models import TEAM_NAMES, GameError, Player, Side
+from .snapshot import game_snapshot, game_summary
 
-__all__ = ["Game", "GameError", "Player", "Side", "TARGET", "BARREL_MODES", "TEAM_NAMES"]
 
 TURN_EVENTS = {
     "commit", "win", "join", "leave", "overtake", "tie_zero", "samosval", "pit_enter",
     "pit_fail", "barrel_sit", "barrel_knock", "barrel_fall", "barrel_zero", "bolt_penalty",
     "dot_penalty", "dot_zero", "dot", "timeout", "limit", "hot_saved", "debt", "rules_changed",
 }
-
-TEAM_NAMES = ["🔴 Красные", "🔵 Синие", "🟢 Зелёные", "🟡 Жёлтые"]
-
-@lru_cache(maxsize=32)
-def roll_odds(n: int, scoring_json: str) -> tuple[float, float]:
-    """(шанс пустого броска, ожидаемые очки) для n кубиков — для аналитики удачи и решений."""
-    sc = json.loads(scoring_json)
-    zero = total = 0
-    for dice in itertools.product(range(1, 7), repeat=n):
-        pts = score_roll(list(dice), sc)[0]
-        zero += pts == 0
-        total += pts
-    count = 6 ** n
-    return zero / count, total / count
-
-
-class GameError(Exception):
-    pass
-
-
-# общее состояние стороны: у одиночного игрока своё, у команды — одно на двоих
-SIDE_FIELDS = ("score", "opened", "bolts", "debt", "on_barrel", "barrel_attempts", "barrel_falls", "dots", "dot_penalties")
-
-
-@dataclass
-class Side:
-    score: int = 0
-    opened: bool = False
-    bolts: int = 0
-    debt: int = 0  # штраф за болты до открытия: гасится из записанных очков, пока не выплачен
-    on_barrel: bool = False
-    barrel_attempts: int = 0
-    barrel_falls: int = 0
-    dots: int = 0
-    dot_penalties: int = 0
-    barrel_entered_by: int | None = None
-    team: int | None = None  # номер команды (None — одиночный игрок)
-
-
-def new_analytics() -> dict:
-    """Счётчики игрока за партию для аналитики (удача, риск, решения, соперники, честность кубиков)."""
-    return {
-        "turns": 0, "rolls": 0, "pts": 0, "exp": 0.0, "faces": [0] * 6,
-        "commits": 0, "commit_pts": 0, "burned": 0, "burned_pts": 0,
-        "risky_opps": 0, "risky_rolls": 0, "dec": 0, "dec_good": 0,
-        "overtook": {}, "zeroed": {},
-        "detail": {
-            "turns": 0, "successful": 0, "recorded": 0, "burned": {},
-            "deductions": {}, "pit_attempts": 0, "pit_exits": 0, "barrel_entries": 0,
-            "barrel_wins": 0,
-        },
-    }
-
-
-@dataclass
-class Player:
-    uid: int
-    name: str
-    side: Side = field(default_factory=Side)
-    order_rolls: list[int] = field(default_factory=list)
-    # статистика за партию
-    st: dict = field(default_factory=lambda: {
-        "samosvals": 0, "bolt_penalties": 0, "barrel_falls": 0,
-        "overtakes": 0, "overtaken": 0, "best_turn": 0, "zeros": 0,
-    })
-    # факты для ачивок (game/achievements.py)
-    facts: set = field(default_factory=set)
-    an: dict = field(default_factory=new_analytics)
-
-
-def _side_prop(name: str) -> property:
-    return property(lambda self: getattr(self.side, name), lambda self, v: setattr(self.side, name, v))
-
-
-for _f in SIDE_FIELDS:
-    setattr(Player, _f, _side_prop(_f))
 
 
 class Game:
@@ -367,40 +289,15 @@ class Game:
 
     # ---------- ход ----------
 
-    def _note_decision(self, p: Player, rolled: bool) -> None:
-        """Аналитика решения «бросать/записать»: сравниваем с выгодой одного броска по математике."""
-        if self.quiet or self.rolls_in_turn == 0 or self.must_roll or not self.can_stop():
-            return
-        n = self.dice_left
-        p0, mean = roll_odds(n, json.dumps(self.rules["scoring"], sort_keys=True))
-        roll_better = mean - p0 * self.turn_points > 0
-        a = p.an
-        a["dec"] += 1
-        a["dec_good"] += int(roll_better == rolled)
-        if n <= 2:
-            a["risky_opps"] += 1
-            a["risky_rolls"] += int(rolled)
-
-    def _note_roll(self, p: Player, dice: list[int], points: int) -> None:
-        """Аналитика удачи и честности кубиков."""
-        if self.quiet:
-            return
-        a = p.an
-        a["rolls"] += 1
-        a["pts"] += points
-        a["exp"] += roll_odds(len(dice), json.dumps(self.rules["scoring"], sort_keys=True))[1]
-        for d in dice:
-            a["faces"][d - 1] += 1
-
     def roll(self, uid: int) -> list[dict]:
         self._begin()
         p = self._check_turn(uid)
         r = self.rules
         n = self.dice_left
-        self._note_decision(p, True)
+        note_decision(self, p, True)
         dice = self._roll_dice(n)
         points, idx = score_roll(dice, r["scoring"])
-        self._note_roll(p, dice, points)
+        note_roll(self, p, dice, points)
         confirming = self.must_roll
         self.roll_seq += 1
         self.rolls_in_turn += 1
@@ -475,7 +372,7 @@ class Game:
         p = self._check_turn(uid)
         if not self.can_stop():
             raise GameError("сейчас нельзя записать очки")
-        self._note_decision(p, False)
+        note_decision(self, p, False)
         self._commit(p)
         return self._new_events
 
@@ -779,62 +676,7 @@ class Game:
     # ---------- сериализация ----------
 
     def to_dict(self) -> dict:
-        return {
-            "phase": self.phase,
-            "barrel": self.barrel,
-            "players": [{
-                "uid": p.uid, "name": p.name, "score": p.score, "opened": p.opened,
-                "bolts": p.bolts, "debt": p.debt, "on_barrel": p.on_barrel,
-                "barrel_attempts": p.barrel_attempts, "barrel_falls": p.barrel_falls,
-                "dots": p.dots, "dot_penalties": p.dot_penalties,
-                "order_rolls": p.order_rolls, "order_pending": self.order_pending(p),
-                "in_pit": self.pit_top(p.score) is not None, "best_turn": p.st["best_turn"],
-                "team": p.side.team,
-            } for p in self.players],
-            "teams": self.teams,
-            "order": self.order if self.phase == "play" else [],
-            "current_uid": self.cur.uid if self.phase == "play" else None,
-            "turn_points": self.turn_points,
-            "turn_start_score": self.turn_start_score,
-            "dice_left": self.dice_left,
-            "kept": self.kept,
-            "must_roll": self.must_roll,
-            "rolls_in_turn": self.rolls_in_turn,
-            "can_stop": self.can_stop(),
-            "hint": self.hint(),
-            "risk": risk_table(self.rules),
-            "last_roll": self.last_roll,
-            "log": self.log[-40:],
-            "winner_uid": self.winner,
-            "winners": self.winners,
-            "summary": self.summary() if self.phase == "finished" else None,
-        }
+        return game_snapshot(self)
 
     def summary(self) -> dict:
-        """Итоги партии: таблица по игрокам, история счёта и яркие моменты."""
-        rows = []
-        for p in self.players:
-            st = p.st
-            rows.append({"uid": p.uid, "name": p.name, "score": p.score, "team": p.side.team, "best_turn": st["best_turn"],
-                         "detail": p.an["detail"], "samosvals": st["samosvals"], "bolt_penalties": st["bolt_penalties"],
-                         "overtakes": st["overtakes"], "zeros": st["zeros"], "barrel_falls": st["barrel_falls"]})
-        rows.sort(key=lambda r: (r["uid"] not in self.winners, r["uid"] != self.winner, -r["score"], r["team"] or 0))
-        highlights = []
-        if rows:
-            best = max(rows, key=lambda r: r["best_turn"])
-            if best["best_turn"]:
-                highlights.append(f"💥 Лучший ход: {best['name']} — {best['best_turn']}")
-            for key, text in (("samosvals", "🚛 Самосвалов"), ("bolt_penalties", "🔩 Штрафов за болты"),
-                              ("overtakes", "🏎 Обгонов")):
-                top = max(rows, key=lambda r: r[key])
-                if top[key]:
-                    highlights.append(f"{text} больше всех: {top['name']} ({top[key]})")
-        gap = 0
-        if self.winner is not None and self.history:
-            w = str(self.winner)
-            gap = max((max(h["scores"].values()) - h["scores"][w] for h in self.history if w in h["scores"]), default=0)
-            if gap >= 200:
-                name = next((r["name"] for r in rows if r["uid"] == self.winner), "?")
-                highlights.append(f"🔄 Камбэк: {name} отставал(а) на {gap} и победил(а)")
-        return {"rows": rows, "history": self.history[-400:], "highlights": highlights,
-                "turns": self.turn_no, "comeback": gap}
+        return game_summary(self)

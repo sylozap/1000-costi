@@ -1,112 +1,16 @@
-"""История сыгранных партий (data/games.jsonl) и аналитика по ней: профиль, соперники, рекорды чата."""
+"""Аналитика профилей и рекордов по истории партий."""
 from __future__ import annotations
 
-import json
-import logging
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-log = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from .store import History
 
-# критическое значение хи-квадрат для 5 степеней свободы при уровне значимости 0.05
+# Критическое значение хи-квадрат для пяти степеней свободы при уровне значимости 0.05.
 CHI2_5_DOF_05 = 11.07
-LUCK_MIN_ROLLS = 30  # меньше бросков — удачу не показываем
+LUCK_MIN_ROLLS = 30
 
-
-class History:
-    def __init__(self, path: Path | None):
-        self.path = path
-        self.games: list[dict] = []
-        if path and path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                try:
-                    self.games.append(json.loads(line))
-                except json.JSONDecodeError:
-                    log.warning("битая строка в %s пропущена", path)
-
-    def add(self, rec: dict) -> None:
-        base, n = rec["id"], 2
-        while any(g["id"] == rec["id"] for g in self.games):  # id — комната и секунда; бывают совпадения
-            rec["id"], n = f"{base}-{n}", n + 1
-        self.games.append(rec)
-        if not self.path:
-            return
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        except OSError:
-            log.warning("не удалось записать историю партий")
-
-    def save(self) -> None:
-        """Переписывает файл целиком (после исключения, возврата или удаления партии)."""
-        if not self.path:
-            return
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text("".join(json.dumps(g, ensure_ascii=False) + "\n" for g in self.games), encoding="utf-8")
-            tmp.replace(self.path)
-        except OSError:
-            log.warning("не удалось записать историю партий")
-
-    def remove(self, gid: str) -> None:
-        self.games = [g for g in self.games if g["id"] != gid]
-        self.save()
-
-    def get(self, gid: str, include_off: bool = False) -> dict | None:
-        return next((g for g in self.games if g["id"] == gid and (include_off or not g.get("off"))), None)
-
-    def counted(self) -> list[dict]:
-        """Партии, которые учитываются в статистике (без исключённых админом)."""
-        return [g for g in self.games if not g.get("off")]
-
-    def of_user(self, uid: int) -> list[dict]:
-        return [g for g in self.counted() if any(p["uid"] == uid for p in g["players"])]
-
-    def of_chat(self, chat_id) -> list[dict]:
-        return [g for g in self.counted() if g.get("chat") == chat_id]
-
-
-def bank_shares(stakes: dict, winners: list) -> dict[int, int]:
-    """Сколько фишек банка получает каждый победитель-человек (в команде — поровну)."""
-    bank = sum(stakes.values())
-    people = [u for u in winners if u >= 0]
-    if not bank or not people:
-        return {}
-    return {u: bank // len(people) for u in people}
-
-
-def game_record(room, now: float | None = None) -> dict:
-    """Запись о законченной партии для истории (room — game.rooms.Room)."""
-    g = room.game
-    now = now or time.time()
-    return {
-        "id": f"{room.id}-{int(now)}",
-        "chat": room.chat_id,
-        "t0": room.started_at or now,
-        "t1": now,
-        "map": room.map,
-        "preset": room.preset_name(),
-        "rule_history": g.rule_history,
-        "teams": g.teams,
-        "winners": g.winners,
-        "turns": g.turn_no,
-        "players": [{
-            "uid": p.uid, "name": p.name, "score": p.score, "team": p.side.team, "bot": p.uid < 0,
-            "st": p.st, "an": p.an,
-        } for p in g.players],
-        "history": g.history,
-        "winprob": room.winprob_hist,
-        "chat_title": room.chat_title,
-        # всё, что нужно, чтобы аннулировать партию: ачивки партии, ставки, вмешательства админа
-        "ach": {str(u): sorted(ids) for u, ids in room._announced.items() if ids},
-        "stakes": {str(u): v for u, v in room.stakes.items() if v},
-        "rigged": room.rigged,
-    }
-
-
-# ---------- расчёты ----------
 
 def _pct(a: float, b: float) -> int | None:
     return round(100 * a / b) if b else None
